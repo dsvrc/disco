@@ -1,0 +1,39 @@
+exp_name: stream # Experiment names
+# seed: 1234 # Seed value
+seed: 5
+
+test_ckpt: "outputs/20260127_083018_ldf_multi_stand/step_step=360000.ckpt"
+test_vae_ckpt: "tmp/models/multi_stand/vae/step_step=240000.ckpt"
+vqpae_ckpt: "PAE_training/DeepPhase4Audio-main/output/20260111_023242_VQ_PAE-aistpp_1000_eps-8emb/checkpoints/step_epoch=199.ckpt"
+
+# test_ckpt: "outputs/__archived__/Group1/20251225_232805_ldf/step_step=140000.ckpt"
+# test_vae_ckpt: "outputs/__archived__/Group1/20251225_142424_vae_wan_1d_finedance_263/step_step=13000.ckpt"
+
+# test_ckpt: "outputs/__archived__/Group1/20251225_232805_ldf/step_step=140000.ckpt"
+# test_vae_ckpt: "outputs/__archived__/Group2/20251220_131405_vae_wan_1d_aistpp/step_step=30000.ckpt"
+# test_ckpt: "outputs/__archived__/Group2/step_step=110000.ckpt"
+# test_vae_ckpt: "outputs/__archived__/Group2/20251220_131405_vae_wan_1d_aistpp/step_step=30000.ckpt"
+
+test_vae:
+    target: models.vae_wan_1d.VAEWanModel
+    ema_decay: 0.99
+    params:
+        input_dim: 272
+        z_dim: 4
+model:
+    target: models.diffusion_forcing_wan.DiffForcingWanModel
+    ema_decay: 0.99
+    params:
+        input_dim: 4
+        noise_steps: 10
+        hidden_dim: 256
+        ffn_dim: 1024
+        freq_dim: 64
+        num_heads: 8
+        num_layers: 8
+        time_embedding_scale: 1.0
+        chunk_size: 5
+        drop_out: 0.1
+        cfg_scale: 5.0
+        prediction_type: "vel"
+        music_dim: 16 # VQ-PAE feature dim

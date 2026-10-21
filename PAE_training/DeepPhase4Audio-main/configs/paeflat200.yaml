@@ -1,0 +1,44 @@
+metadata:
+  # run_name: 'paeflat_onetone_200eps'
+  run_name: 'paeflat_twinkle_200eps'
+  log_dir: 'logs'
+  logging: True
+
+dataset_config:
+  dataset: 'audio_dataset'
+  dataset_root: 'data/twinkle' #pay attention to this path
+  reconstruction_save_dir: 'save/paeflat_onetone_50eps/'
+  resume: null
+
+training_config:
+  num_epochs: 1000  ## reduced since fast convergence
+  batch_size: 10
+  batch_size_validation: 10
+  optimizer: 'adam'
+  optimizer_lr: 0.0005  ## reduced for stable training
+  optimizer_momentum: 0.8
+  optimizer_weight_decay: 0.001
+  optimizer_float_16: False
+  lr_scheduler: 'poly'
+  lr_scheduler_power: 0.9
+  ckpt_save_dir: 'logs/checkpoints'
+  mse_w: 10.0  ## increased for better reconstruction
+  stft_sc_w: 0.05  ## increased spectral loss
+  stft_mag_w: 0.05
+
+model_config:
+  experiment_name: 'PAEInputFlattenedModel'
+  model_name: 'pae_flat'
+  input_channels: 1
+  intermediate_channels: 32  ## Match checkpoint (was 64)
+  embedding_channels: 8  ## Match checkpoint (was 32)
+  kernel_size: 51
+  time_range: 32000
+  window: 2.0 #2 second window
+  dilation: 10 # is irrelevant for multi dialation since fixed in code
+
+
+
+worker_config:
+  workers: 0
+  workers_validation: 0 

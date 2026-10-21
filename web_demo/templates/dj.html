@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Music2Dance — Live Mixer</title>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Barlow+Condensed:wght@400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/dj-style.css">
+</head>
+<body>
+    <!-- Hidden audio elements for the 3 tracks -->
+    <audio id="track1Audio" src="/static/audio/track1.wav" preload="auto"></audio>
+    <audio id="track2Audio" src="/static/audio/track2.wav" preload="auto"></audio>
+    <audio id="track3Audio" src="/static/audio/track3.wav" preload="auto"></audio>
+
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <h1>Music2Dance</h1>
+            <span class="subtitle">Live multi-source audio mixer for real-time dance generation</span>
+        </header>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Left Panel: Mixer -->
+            <div class="left-panel">
+                <!-- Audio Console -->
+                <div class="dj-console">
+                    <div class="dj-title">Multi-Source Audio Mixer</div>
+
+                    <!-- Channel Strips -->
+                    <div class="channel-strips">
+                        <!-- Track 1 -->
+                        <div class="channel-strip" id="channelStrip0">
+                            <span class="channel-label">Track 1</span>
+                            <div class="fader-container">
+                                <div class="level-meter" id="meter0">
+                                    <div class="meter-segment seg-red"></div>
+                                    <div class="meter-segment seg-red"></div>
+                                    <div class="meter-segment seg-yellow"></div>
+                                    <div class="meter-segment seg-yellow"></div>
+                                    <div class="meter-segment seg-yellow"></div>
+                                    <div class="meter-segment seg-green"></div>
+                                    <div class="meter-segment seg-green"></div>
+                                    <div class="meter-segment seg-green"></div>
+                                    <div class="meter-segment seg-green"></div>
+                                    <div class="meter-segment seg-green"></div>
+                                </div>
+                                <input type="range" class="vertical-fader" id="fader0"
+                                       min="0" max="100" value="0"
+                                       oninput="onFaderInput(0, this.value)">
+                            </div>
+                            <span class="fader-value" id="faderValue0">0</span>
+                        </div>
+
+                        <!-- Track 2 -->
+                        <div class="channel-strip" id="channelStrip1">
+                            <span class="channel-label">Track 2</span>
+                            <div class="fader-container">
+                                <div class="level-meter" id="meter1">
+                                    <div class="meter-segment seg-red"></div>
+                                    <div class="meter-segment seg-red"></div>
+                                    <div class="meter-segment seg-yellow"></div>
+                                    <div class="meter-segment seg-yellow"></div>
+                                    <div class="meter-segment seg-yellow"></div>
+                                    <div class="meter-segment seg-green"></div>
+                                    <div class="meter-segment seg-green"></div>
+                                    <div class="meter-segment seg-green"></div>
+                                    <div class="meter-segment seg-green"></div>
+                                    <div class="meter-segment seg-green"></div>
+                                </div>
+                                <input type="range" class="vertical-fader" id="fader1"
+                                       min="0" max="100" value="0"
+                                       oninput="onFaderInput(1, this.value)">
+                            </div>
+                            <span class="fader-value" id="faderValue1">0</span>
+                        </div>
+
+                        <!-- Track 3 -->
+                        <div class="channel-strip" id="channelStrip2">
+                            <span class="channel-label">Track 3</span>
+                            <div class="fader-container">
+                                <div class="level-meter" id="meter2">
+                                    <div class="meter-segment seg-red"></div>
+                                    <div class="meter-segment seg-red"></div>
+                                    <div class="meter-segment seg-yellow"></div>
+                                    <div class="meter-segment seg-yellow"></div>
+                                    <div class="meter-segment seg-yellow"></div>
+                                    <div class="meter-segment seg-green"></div>
+                                    <div class="meter-segment seg-green"></div>
+                                    <div class="meter-segment seg-green"></div>
+                                    <div class="meter-segment seg-green"></div>
+                                    <div class="meter-segment seg-green"></div>
+                                </div>
+                                <input type="range" class="vertical-fader" id="fader2"
+                                       min="0" max="100" value="0"
+                                       oninput="onFaderInput(2, this.value)">
+                            </div>
+                            <span class="fader-value" id="faderValue2">0</span>
+                        </div>
+
+                        <!-- Speaker -->
+                        <div class="channel-strip" id="channelStrip3">
+                            <span class="channel-label">Speaker</span>
+                            <div class="fader-container">
+                                <div class="level-meter" id="meter3">
+                                    <div class="meter-segment seg-red"></div>
+                                    <div class="meter-segment seg-red"></div>
+                                    <div class="meter-segment seg-yellow"></div>
+                                    <div class="meter-segment seg-yellow"></div>
+                                    <div class="meter-segment seg-yellow"></div>
+                                    <div class="meter-segment seg-green"></div>
+                                    <div class="meter-segment seg-green"></div>
+                                    <div class="meter-segment seg-green"></div>
+                                    <div class="meter-segment seg-green"></div>
+                                    <div class="meter-segment seg-green"></div>
+                                </div>
+                                <input type="range" class="vertical-fader" id="fader3"
+                                       min="0" max="100" value="0"
+                                       oninput="onFaderInput(3, this.value)">
+                            </div>
+                            <span class="fader-value" id="faderValue3">0</span>
+                            <button class="btn-capture" id="speakerCaptureBtn" onclick="toggleSpeakerCapture()">Capture</button>
+                        </div>
+                    </div>
+
+                    <!-- Visualizers -->
+                    <div class="visualizer-section">
+                        <div class="visualizer-item">
+                            <canvas id="waveformCanvas" width="600" height="100"></canvas>
+                        </div>
+                        <div class="visualizer-item">
+                            <canvas id="spectrumCanvas" width="600" height="100"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Controls Row -->
+                <div class="controls-row">
+                    <div class="param-group">
+                        <label>History</label>
+                        <input type="number" id="historyLength" min="10" max="200" value="30">
+                    </div>
+                    <div class="param-group">
+                        <label>Denoise Steps</label>
+                        <input type="number" id="denoiseSteps" min="5" max="50" step="5" value="10">
+                    </div>
+                    <div class="param-group slider-group">
+                        <label>Smooth</label>
+                        <input type="range" id="smoothingAlpha" min="0" max="1" step="0.05" value="0.5">
+                        <span id="smoothingValue">0.50</span>
+                    </div>
+                </div>
+
+                <!-- Hidden elements for compatibility -->
+                <input type="hidden" id="motionText" value="dance to the music">
+                <div style="display:none;">
+                    <span id="currentMode">Audio</span>
+                    <span id="currentSmoothing">0.50</span>
+                    <span id="currentSteps">10</span>
+                    <span id="modeHint"></span>
+                    <button id="audioModeBtn" class="active"></button>
+                    <button id="updateBtn" disabled></button>
+                </div>
+
+                <!-- Buttons Row -->
+                <div class="buttons-row">
+                    <button id="startResetBtn" class="btn btn-primary">Start</button>
+                    <button id="pauseResumeBtn" class="btn btn-warning" disabled>Pause</button>
+                </div>
+
+                <!-- Status Row -->
+                <div class="status-row">
+                    <div class="status-item"><span class="label">Status:</span><span id="status">Idle</span></div>
+                    <div class="status-item"><span class="label">FPS:</span><span id="fps">0</span></div>
+                    <div class="status-item"><span class="label">Frames:</span><span id="frameCount">0</span></div>
+                    <div class="status-item"><span class="label">Buffer:</span><span id="bufferSize">0/4</span></div>
+                    <div class="status-item"><span class="label">Features:</span><span id="audioFeatureFrames">0</span></div>
+                </div>
+
+                <!-- Performance Stats Row -->
+                <div class="stats-row">
+                    <div class="stats-title">Performance</div>
+                    <div class="stat-item"><span class="label">Prep:</span><span id="statPrepare">-</span></div>
+                    <div class="stat-item"><span class="label">Model:</span><span id="statModel">-</span></div>
+                    <div class="stat-item"><span class="label">VAE:</span><span id="statVAE">-</span></div>
+                    <div class="stat-item"><span class="label">Frame:</span><span id="statFrame">-</span></div>
+                    <div class="stat-item"><span class="label">Post:</span><span id="statPost">-</span></div>
+                    <div class="stat-item"><span class="label">Resample:</span><span id="statResample">-</span></div>
+                    <div class="stat-item"><span class="label">Extract:</span><span id="statExtract">-</span></div>
+                    <div class="stat-item"><span class="label">Total:</span><span id="statTotal">-</span></div>
+                </div>
+
+                <!-- Conflict Warning -->
+                <div id="conflictWarning" class="conflict-warning" style="display: none;">
+                    <p><strong>Another user is generating!</strong></p>
+                    <button id="forceTakeoverBtn" class="btn btn-danger btn-sm">Force Takeover</button>
+                    <button id="cancelTakeoverBtn" class="btn btn-sm">Cancel</button>
+                </div>
+            </div>
+
+            <!-- Right Panel: 3D Canvas -->
+            <div class="right-panel">
+                <div id="canvas-container">
+                    <canvas id="renderCanvas"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <footer class="app-footer">
+            Live Mixer | Drag faders to mix audio sources | Start to generate dance motion
+        </footer>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="/static/js/dj-mixer.js?v=1"></script>
+    <script src="/static/js/skeleton.js?v=2"></script>
+    <script src="/static/js/dj-main.js?v=1"></script>
+</body>
+</html>

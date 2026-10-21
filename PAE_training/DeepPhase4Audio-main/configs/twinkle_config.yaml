@@ -1,0 +1,46 @@
+metadata:
+  run_name: 'PAEDeeper_twinkle_Experiment'
+  log_dir: 'logs'
+  logging: True
+
+mse_w: 3.0
+stft_sc_w: 0.01
+stft_mag_w: 0.02
+num_epochs: 3000  ## total training epochs
+embedding_channels: 3
+check_val_every_n_epoch: 1000  ## validation frequency
+
+dataset_config:
+  dataset: 'audio_dataset'
+  dataset_root: 'data/twinkle'
+  resume: null
+
+training_config:
+  num_epochs: 3000  ## total training epochs
+  batch_size: 10
+  batch_size_validation: 10
+  optimizer: 'adam'
+  optimizer_lr: 0.0001  ## reduced to prevent NaN
+  optimizer_momentum: 0.9
+  optimizer_weight_decay: 0.001
+  optimizer_float_16: False
+  lr_scheduler: 'poly'
+  lr_scheduler_power: 0.9
+  ckpt_save_dir: 'logs/checkpoints'
+
+model_config:
+  experiment_name: 'PAEInputFlattenedModel'
+  model_name: 'pae_flat'
+  input_channels: 1
+  intermediate_channels: 32
+  intermediate_channels2: 1 # 16
+  intermediate_channels1: 1 # TODO: remove
+  embedding_channels: 3
+  kernel_size: 51
+  time_range: 160000  ## 10 seconds at 16kHz
+  window: 10.0  ## 10 second window
+  dilation: 10
+
+worker_config:
+  workers: 0
+  workers_validation: 0

@@ -1,0 +1,144 @@
+<!-- FrontEnd Layout -->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-time Music2Dance</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <h1>🎵 Real-time Music2Dance</h1>
+            <span class="subtitle">AI-powered motion synthesis</span>
+        </header>
+
+        <!-- Main Content: Left (Audio) + Right (3D) -->
+        <div class="main-content">
+            <!-- Left Panel: Controls + Audio -->
+            <div class="left-panel">
+                <!-- Controls Row -->
+                <div class="controls-row">
+                    <div class="param-group">
+                        <label>History</label>
+                        <input type="number" id="historyLength" min="10" max="200" value="30">
+                    </div>
+                    <div class="param-group">
+                        <label>Denoise Steps</label>
+                        <input type="number" id="denoiseSteps" min="5" max="50" step="5" value="10">
+                    </div>
+                    <div class="param-group slider-group">
+                        <label>Smooth α</label>
+                        <input type="range" id="smoothingAlpha" min="0" max="1" step="0.05" value="0.5">
+                        <span id="smoothingValue">0.50</span>
+                    </div>
+                </div>
+
+                <!-- Hidden elements for compatibility -->
+                <input type="hidden" id="motionText" value="dance to the music">
+
+                <!-- Buttons Row -->
+                <div class="buttons-row">
+                    <button id="audioModeBtn" class="btn btn-mode active" style="display:none;">🎵 Audio</button>
+                    <button id="startResetBtn" class="btn btn-primary">Start</button>
+                    <button id="pauseResumeBtn" class="btn btn-warning" disabled>Pause</button>
+                    <button id="updateBtn" class="btn btn-secondary" disabled style="display:none;">Update</button>
+                </div>
+
+                <!-- Status Row -->
+                <div class="status-row">
+                    <div class="status-item"><span class="label">Status:</span><span id="status">Idle</span></div>
+                    <div class="status-item"><span class="label">FPS:</span><span id="fps">0</span></div>
+                    <div class="status-item"><span class="label">Frames:</span><span id="frameCount">0</span></div>
+                    <div class="status-item"><span class="label">Buffer:</span><span id="bufferSize">0/4</span></div>
+                    <div class="status-item audio-mode-status"><span class="label">Features:</span><span id="audioFeatureFrames">0</span></div>
+                </div>
+                
+                <!-- Performance Stats Row -->
+                <div class="stats-row">
+                    <div class="stats-title">⚡ Performance</div>
+                    <div class="stat-item"><span class="label">Prep:</span><span id="statPrepare">-</span></div>
+                    <div class="stat-item"><span class="label">Model:</span><span id="statModel">-</span></div>
+                    <div class="stat-item"><span class="label">VAE:</span><span id="statVAE">-</span></div>
+                    <div class="stat-item"><span class="label">Frame:</span><span id="statFrame">-</span></div>
+                    <div class="stat-item"><span class="label">Post:</span><span id="statPost">-</span></div>
+                    <div class="stat-item audio-mode-status"><span class="label">Resample:</span><span id="statResample">-</span></div>
+                    <div class="stat-item audio-mode-status"><span class="label">Extract:</span><span id="statExtract">-</span></div>
+                    <div class="stat-item"><span class="label">Total:</span><span id="statTotal">-</span></div>
+                </div>
+                
+                <!-- Hidden status items for compatibility -->
+                <div style="display:none;">
+                    <span id="currentMode">Audio</span>
+                    <span id="currentSmoothing">0.50</span>
+                    <span id="currentSteps">10</span>
+                    <span id="modeHint"></span>
+                </div>
+
+                <!-- Audio Section -->
+                <div class="audio-section">
+                    <div class="audio-header-row">
+                        <span class="audio-title">🎵 Audio Input</span>
+                        <select id="audioSourceSelect" class="audio-select">
+                            <option value="system">🔊 System</option>
+                            <option value="microphone">🎤 Mic</option>
+                        </select>
+                        <button id="audioToggleBtn" class="btn btn-audio">
+                            <span id="audioIcon">🎤</span>
+                            <span id="audioText">Capture</span>
+                        </button>
+                        <button id="clearAudioBtn" class="btn btn-sm" disabled>Clear</button>
+                    </div>
+                    
+                    <div class="audio-status-row">
+                        <span><span id="audioStatus">Idle</span></span>
+                        <span>Dur: <span id="audioDuration">0.0s</span></span>
+                        <span>SR: <span id="sampleRate">--</span></span>
+                    </div>
+
+                    <!-- Audio Visualizers -->
+                    <div class="visualizer-stack">
+                        <div class="visualizer-item">
+                            <canvas id="waveformCanvas" width="600" height="80"></canvas>
+                        </div>
+                        <div class="visualizer-item">
+                            <canvas id="spectrumCanvas" width="600" height="80"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Conflict Warning (hidden by default) -->
+                <div id="conflictWarning" class="conflict-warning" style="display: none;">
+                    <p><strong>⚠️ Another user is generating!</strong></p>
+                    <button id="forceTakeoverBtn" class="btn btn-danger btn-sm">Force Takeover</button>
+                    <button id="cancelTakeoverBtn" class="btn btn-sm">Cancel</button>
+                </div>
+
+                <!-- Hidden hint for audio source -->
+                <div id="audioSourceHint" style="display:none;"></div>
+            </div>
+
+            <!-- Right Panel: 3D Canvas -->
+            <div class="right-panel">
+                <div id="canvas-container">
+                    <canvas id="renderCanvas"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <footer class="app-footer">
+            💡 Target: 20 FPS | Use mouse to orbit camera | First run loads model
+        </footer>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="/static/js/audio-capture.js?v=2"></script>
+    <script src="/static/js/skeleton.js?v=2"></script>
+    <script src="/static/js/main.js?v=2"></script>
+</body>
+</html>

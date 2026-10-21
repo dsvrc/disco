@@ -1,0 +1,23 @@
+exp_name: stream # Experiment names
+seed: 1234 # Seed value
+
+test_ckpt: ""
+test_vae_ckpt: ""
+
+test_vae:
+    target: models.vae_wan_1d.VAEWanModel
+    ema_decay: 0.99
+    params:
+        input_dim: 272
+        z_dim: 4
+model:
+    target: models.diffusion_forcing_wan.DiffForcingWanModel
+    ema_decay: 0.99
+    params:
+        input_dim: 4
+        noise_steps: 10
+        cfg_scale: 5.0
+        prediction_type: vel
+        music_dim: 16
+        use_history_guidance: true
+        history_guidance_scale: 2.5

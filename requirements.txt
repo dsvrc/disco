@@ -1,0 +1,36 @@
+torch == 2.6.0
+lightning
+torch_ema
+transformers==4.30.0
+torchmetrics
+omegaconf
+diffusers==0.21.0
+huggingface_hub==0.15.1
+tokenizers==0.13.3
+numpy
+scipy
+librosa
+soundfile
+
+tensorboard
+wandb
+argparse
+gdown
+tqdm
+
+# render
+flask
+trimesh
+pyrender
+moviepy
+matplotlib
+Pillow
+imageio[ffmpeg]
+
+# wan
+ftfy
+einops
+# For flash attention
+# conda install -c nvidia cuda-toolkit
+# export CUDA_HOME=$CONDA_PREFIX && echo "CUDA_HOME set to: $CUDA_HOME"
+# pip install flash-attn --no-build-isolation

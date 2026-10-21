@@ -1,0 +1,135 @@
+# Frozen motion VAE for the continual-learning benchmark aistpp_genre5 (TMR): session 0 (x10 sampling weight)
+# + BABEL-272 general motion, normalised over the same data. A VAE trained on session 0 alone erases unseen
+# genres (style retention of its reconstructions on S1-S4: 0.09-0.27, collapsing onto LA Hip-hop / Lock), so
+# later sessions could not be learned; BABEL (AMASS, no AIST++) adds coverage without touching sessions 1..K.
+# Data lists / stats: python scripts/make_cl_vae_data.py --benchmark aistpp_genre5
+#   DISCO_CONV_GEMM=1 python train_vae.py --config configs/cl/vae_aistpp_genre5_s0babel.yaml --override train=True
+exp_name: cl_vae_aistpp_genre5_s0babel
+seed: 1234
+debug: false
+train: false
+is_vae: true
+
+save_dir: ./outputs
+resume_ckpt: null
+test_ckpt: null
+test_setting:
+    render: false
+    simple: true
+    recover_dim: 272
+val_repeat: 1
+
+logger:
+    wandb:
+        wandb_key: "${wandb_info.key}"
+        project: "${wandb_info.project}"
+        entity: "${wandb_info.entity}"
+
+trainer: # lightning trainer
+    max_steps: 30000
+    accelerator: gpu
+    devices: [0]
+    log_every_n_steps: 50
+validation:
+    validation_steps: 2500
+    test_steps: 2500
+    save_every_n_steps: 2500
+    save_top_k: 100
+metrics:
+    dim: 272
+    t2m:
+        enable: false
+    m2d:
+        enable: true
+        evaluate_music: false
+        evaluate_physics: false
+
+data:
+    target: datasets.multi.MultiDataset
+    collate_fn: datasets.multi.collate_fn
+    train_bs: 256
+    val_bs: 64
+    test_bs: 64
+    num_workers: 1
+    datasets:
+        - target: datasets.aistpp.AistPPDataset
+          train_meta_paths:
+              - ${dirs.raw_data}/aistpp/cl_aistpp_genre5_s0_train_x10.txt
+          val_meta_paths:
+              - ${dirs.raw_data}/aistpp/cl_aistpp_genre5_s0_val.txt
+          test_meta_paths:
+              - ${dirs.raw_data}/aistpp/cl_aistpp_genre5_s0_test.txt
+          feature_path: "motions_272_30fps"
+          min_length: 64
+          max_length: 1500
+          window_length: 64
+        - target: datasets.babel.BabelDataset
+          enable_val: false
+          enable_test: false
+          train_meta_paths:
+              - ${dirs.raw_data}/babel_272/cl_vae_babel_train.txt
+          feature_path: "train_stream"
+          min_length: 64
+          max_length: 4000
+          window_length: 64
+        - target: datasets.babel.BabelDataset
+          enable_val: false
+          enable_test: false
+          train_meta_paths:
+              - ${dirs.raw_data}/babel_272/cl_vae_babel_val.txt
+          feature_path: "val_stream"
+          min_length: 64
+          max_length: 4000
+          window_length: 64
+
+model:
+    target: models.vae_wan_1d.VAEWanModel
+    ema_decay: 0.99
+    params:
+        input_dim: 272
+        z_dim: 4
+        mean_path: "${dirs.raw_data}/cl_sessions/aistpp_genre5/vae_Mean_272.npy"
+        std_path: "${dirs.raw_data}/cl_sessions/aistpp_genre5/vae_Std_272.npy"
+        vel_window: [4, 67]
+        root_vel_window: [1, 3]
+        root_ang_vel_window: [0, 1]
+        LAMBDA_ROOT_VELOCITY: 0
+        LAMBDA_ROOT_ANG_VELOCITY: 0
+
+optimizer:
+    target: AdamW
+    params:
+        lr: 5e-4
+        betas: [0.9, 0.99]
+        weight_decay: 0.0
+        eps: 1e-8
+
+lr_scheduler:
+    target: CosineAnnealingLR
+    params:
+        T_max: 1000
+        eta_min: 1e-6
+
+# Tokenise every session once with the frozen session-0 VAE (tokens for diffusion training, reconstructions
+# as the fid_target='vae' references and for the style metric's VAE-domain check):
+#   python pretokenize_vae.py --config configs/cl/vae_aistpp_genre5_s0babel.yaml --override test_ckpt=<vae ckpt>
+pretokenize:
+    path_files:
+        - raw_data/aistpp/cl_aistpp_genre5_s0_train.txt
+        - raw_data/aistpp/cl_aistpp_genre5_s0_val.txt
+        - raw_data/aistpp/cl_aistpp_genre5_s0_test.txt
+        - raw_data/aistpp/cl_aistpp_genre5_s1_train.txt
+        - raw_data/aistpp/cl_aistpp_genre5_s1_val.txt
+        - raw_data/aistpp/cl_aistpp_genre5_s1_test.txt
+        - raw_data/aistpp/cl_aistpp_genre5_s2_train.txt
+        - raw_data/aistpp/cl_aistpp_genre5_s2_val.txt
+        - raw_data/aistpp/cl_aistpp_genre5_s2_test.txt
+        - raw_data/aistpp/cl_aistpp_genre5_s3_train.txt
+        - raw_data/aistpp/cl_aistpp_genre5_s3_val.txt
+        - raw_data/aistpp/cl_aistpp_genre5_s3_test.txt
+        - raw_data/aistpp/cl_aistpp_genre5_s4_train.txt
+        - raw_data/aistpp/cl_aistpp_genre5_s4_val.txt
+        - raw_data/aistpp/cl_aistpp_genre5_s4_test.txt
+    feature_path: motions_272_30fps
+    token_path: TOKENS_cl_aistpp_genre5_s0babelvae
+    recovered_path: RECOVERED_cl_aistpp_genre5_s0babelvae

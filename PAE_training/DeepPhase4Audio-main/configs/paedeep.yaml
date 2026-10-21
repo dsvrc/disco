@@ -1,0 +1,41 @@
+metadata:
+  run_name: 'PAEDeep-2tone-500eps-32latent'
+  log_dir: 'logs'
+  logging: True
+
+dataset_config:
+  dataset: 'audio_dataset'
+  dataset_root: 'data/2'  ## use existing piano data
+  resume: null
+
+training_config:
+  num_epochs: 500  ## moderate training duration
+  batch_size: 10
+  batch_size_validation: 10
+  optimizer: 'adam'
+  optimizer_lr: 0.0005  ## reduced for stability
+  optimizer_momentum: 0.9
+  optimizer_weight_decay: 0.001
+  optimizer_float_16: False
+  lr_scheduler: 'poly'
+  lr_scheduler_power: 0.9
+  ckpt_save_dir: 'logs/checkpoints'
+  mse_w: 10.0  ## increased reconstruction weight
+  stft_sc_w: 0.05
+  stft_mag_w: 0.05
+
+model_config:
+  experiment_name: 'PAEDeepModel'
+  model_name: 'pae_deep'
+  input_channels: 1
+  intermediate_channels2: 32  ## increased capacity
+  intermediate_channels1: 16
+  embedding_channels: 32  ## adequate for deep model
+  kernel_size: 50
+  time_range: 32000
+  window: 2.0
+  dilation: 7
+
+worker_config:
+  workers: 0
+  workers_validation: 0

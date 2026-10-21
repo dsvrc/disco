@@ -1,0 +1,11 @@
+# Requirements for Music PAE Training
+
+# Core dependencies
+torch>=2.0.0
+numpy>=1.20.0
+matplotlib>=3.5.0
+tqdm>=4.65.0
+
+# Optional: For music feature extraction
+# librosa>=0.10.0
+# soundfile>=0.12.0

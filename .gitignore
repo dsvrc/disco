@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.pyc
+*.pth
+*.pt
+*.model
+*.bin
+*.whl
+*.ipynb
+
+# OS / Editor
+.DS_Store
+.vscode/
+.ipynb_checkpoints/
+
+# Linter / Formatter
+.ruff_cache/
+
+# Logs
+logs*/
+*.log
+log_*
+slurm*
+lightning_logs/
+wandb/
+
+# Training outputs
+outputs/
+tmp/
+pretrained/
+
+# Data
+raw_data/
+data/
+eval/
+deps/
+
+# Configs (local overrides)
+configs/paths.yaml
+
+# Web demo
+server.pid
+*.pid
+web_demo/static/audio/
+
+# PAE training output
+PAE_training/DeepPhase4Audio-main/output
+
+# Debug / Docs
+debug/
+doc/
+configs_old/
+.github/

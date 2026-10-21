@@ -1,0 +1,159 @@
+
+exp_name: ldf_multi_stand # Experiment names
+seed: 1234 # Seed value
+debug: false
+train: false
+
+save_dir: ./outputs
+resume_ckpt: null
+test_ckpt: null
+test_vae_ckpt: null
+test_vae:
+    target: models.vae_wan_1d.VAEWanModel
+    ema_decay: 0.99
+    params:
+        input_dim: 272
+        z_dim: 4
+        mean_path: "${dirs.raw_data}/multi_stand_272_sliced/Mean_272.npy"
+        std_path: "${dirs.raw_data}/multi_stand_272_sliced/Std_272.npy"
+test_setting:
+    render: true
+    simple: true
+    recover_dim: 272
+    finedance:
+        compare_folders:
+            - "${dirs.raw_data}/finedance/animations_272_30fps_sliced"
+        compare_names:
+            - "Ground Truth"
+        music_dir: "${dirs.raw_data}/finedance/music_wav_sliced"
+    aistpp:
+        compare_folders:
+            - "${dirs.raw_data}/aistpp/animations_272_30fps"
+        compare_names:
+            - "Ground Truth"
+        music_dir: "${dirs.raw_data}/aistpp/wavs"
+    babel:
+        compare_folders:
+            - "${dirs.raw_data}/babel_272/all_stream_stand_30fps_animations"
+        compare_names:
+            - "Ground Truth"
+        music_dir: "${dirs.raw_data}/babel_272/near_silence_wavs_15360_stand"
+
+val_repeat: 1
+
+logger:
+    wandb:
+        wandb_key: "${wandb_info.key}"
+        project: "${wandb_info.project}"
+        entity: "${wandb_info.entity}"
+
+trainer: # lightning trainer
+    max_steps: 1000000
+    accelerator: gpu
+    devices: [0]
+    log_every_n_steps: 100
+    precision: bf16-mixed
+validation:
+    validation_steps: 60000
+    test_steps: 30000
+    save_every_n_steps: 10000
+    save_top_k: 100
+metrics:
+    dim: 272 # Dim
+    m2d:
+        enable: true
+        fid_target: "vae"
+        evaluate_music: true
+        evaluate_physics: true
+
+data:
+    target: datasets.multi.MultiDataset
+    collate_fn: datasets.multi.collate_fn
+    train_bs: 4
+    val_bs: 4
+    test_bs: 4
+    num_workers: 8
+    datasets:
+        - target: datasets.finedance.FineDanceDataset
+          train_meta_paths:
+              - ${dirs.raw_data}/finedance/train_sliced.txt
+          val_meta_paths:
+              - ${dirs.raw_data}/finedance/test_sliced.txt
+          test_meta_paths:
+              - ${dirs.raw_data}/finedance/test_short_sliced.txt
+          feature_path: "motion_272_30fps_sliced"
+          token_path: "TOKENS_vae_wan_1d_multi_20260121_161620_ckpt_240000_stand"
+          music_path: "vqpae_feats_sliced" 
+          random_length: 0
+          min_length: 5
+          max_length: 300
+          stream_mode: true
+        - target: datasets.aistpp.AistPPDataset
+          train_meta_paths:
+              - ${dirs.raw_data}/aistpp/crossmodal_train_without_val.txt
+          val_meta_paths:
+              - ${dirs.raw_data}/aistpp/crossmodal_val.txt
+          test_meta_paths:
+              - ${dirs.raw_data}/aistpp/crossmodal_test.txt
+          feature_path: "motions_272_30fps"
+          token_path: "TOKENS_vae_wan_1d_multi_20260121_161620_ckpt_240000_stand"
+          music_path: "vqpae_feats"
+          stream_mode: true
+          random_length: 0
+          min_length: 5
+          max_length: 1500
+        - target: datasets.babel.BabelDataset
+          # Keep Babel in training, but disable its validation/test to avoid
+          # metrics computation, sampling, and rendering during training.
+          enable_train: true
+          enable_val: false
+          enable_test: false
+          train_meta_paths:
+              - ${dirs.raw_data}/babel_272/train_stand.txt
+          val_meta_paths:
+              - ${dirs.raw_data}/babel_272/test_stand_20.txt
+          test_meta_paths:
+              - ${dirs.raw_data}/babel_272/test_stand_20.txt
+          feature_path: "all_stream_stand_30fps"
+          token_path: "TOKENS_vae_wan_1d_multi_20260121_161620_ckpt_240000_stand"
+          music_path: "silence_vqpae_feats"
+          stream_mode: true
+          random_length: 0
+          min_length: 64
+          max_length: 4000
+
+model:
+    target: models.diffusion_forcing_wan.DiffForcingWanModel
+    ema_decay: 0.99
+    params:
+        input_dim: 4 
+        noise_steps: 10 
+        max_seq_len: 1024
+        cfg_scale: 5.0
+        prediction_type: "vel"
+        music_dim: 16 # VQ-PAE feature dim
+        # History Guidance config
+        use_history_guidance: true
+        history_guidance_scale: 2.5
+        history_drop_out: 0.5
+        history_drop_soft_noise: true
+
+optimizer:
+    target: AdamW
+    params:
+        lr: 1e-3
+        betas: [0.9, 0.99]
+        weight_decay: 0.0
+        eps: 1e-8
+
+# lr_scheduler:
+#     target: diffusers.optimization.get_constant_schedule_with_warmup
+#     params:
+#         num_warmup_steps: 1000
+
+lr_scheduler:
+    target: CosineAnnealingLR
+    params:
+        T_max: 1000
+        eta_min: 1e-6
+

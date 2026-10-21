@@ -1,3 +1,4 @@
+import inspect
 import numpy
 import os
 import pickle
@@ -40,12 +41,15 @@ def get_body_model(
             f"SMPL model not found at {bm_path}. Please place the neutral npz there or update the path."
         )
     comp_device = device or torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    return BodyModel(
-        bm_path=bm_path,
-        model_type=model_type,
-        num_betas=num_betas,
-        batch_size=batch_size,
-    ).to(comp_device)
+    # human_body_prior renamed bm_path -> bm_fname (2021) and dropped batch_size (inferred in forward);
+    # pass only the arguments the installed version accepts
+    accepted = inspect.signature(BodyModel.__init__).parameters
+    kwargs = {"bm_fname" if "bm_fname" in accepted else "bm_path": bm_path, "num_betas": num_betas}
+    if "model_type" in accepted:
+        kwargs["model_type"] = model_type
+    if "batch_size" in accepted:
+        kwargs["batch_size"] = batch_size
+    return BodyModel(**kwargs).to(comp_device)
 
 ########################## Load Motion Function #######################
 def load_motion_aistpp(motion_file):

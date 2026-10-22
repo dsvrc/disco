@@ -1,0 +1,115 @@
+# Session 1 of the continual-learning benchmark aistpp_genre5 (TMR paper): Middle Hip-hop + Pop, vanilla fine-tuning.
+# Warm start from the model after session 0 (init_ckpt, EMA weights = the model evaluated after session 0); the
+# optimizer, LR schedule, step counter and EMA start fresh, and every other setting (model, losses, optimiser,
+# steps, frozen VAE, music features) is identical to session 0, so only the training data changes.
+#   python train_ldf.py --config configs/cl/ldf_aistpp_genre5_s1.yaml --override train=True \
+#       --override test_vae_ckpt=<frozen VAE checkpoint> --override init_ckpt=<last.ckpt of session 0>
+exp_name: cl_ldf_aistpp_genre5_s1
+seed: 1234
+debug: false
+train: false
+
+save_dir: ./outputs
+resume_ckpt: null # continue an interrupted run of THIS session (restores optimizer / step)
+init_ckpt: null # last.ckpt after session 0: weights only, fresh optimizer / LR schedule / step counter
+init_from_ema: true
+test_ckpt: null
+test_vae_ckpt: null
+test_vae:
+    target: models.vae_wan_1d.VAEWanModel
+    ema_decay: 0.99
+    params:
+        input_dim: 272
+        z_dim: 4
+        mean_path: "${dirs.raw_data}/cl_sessions/aistpp_genre5/alltrain_Mean_272.npy"
+        std_path: "${dirs.raw_data}/cl_sessions/aistpp_genre5/alltrain_Std_272.npy"
+test_setting:
+    render: false
+    simple: true
+    recover_dim: 272
+    aistpp:
+        music_dir: "${dirs.raw_data}/aistpp/wavs"
+
+val_repeat: 1
+
+logger:
+    wandb:
+        wandb_key: "${wandb_info.key}"
+        project: "${wandb_info.project}"
+        entity: "${wandb_info.entity}"
+
+trainer: # lightning trainer
+    max_steps: 40000
+    accelerator: gpu
+    devices: [0]
+    log_every_n_steps: 100
+    precision: bf16-mixed
+validation:
+    validation_steps: 5000
+    test_steps: 5000
+    save_every_n_steps: 2500
+    save_top_k: 100
+metrics:
+    dim: 272
+    t2m:
+        enable: false
+        fid_target: "vae"
+    m2d:
+        enable: true
+        fid_target: "vae"
+        evaluate_music: true
+        evaluate_physics: false
+
+data:
+    target: datasets.aistpp.AistPPDataset
+    collate_fn: datasets.aistpp.collate_fn
+    train_bs: 4
+    val_bs: 4
+    test_bs: 4
+    num_workers: 2
+    train_meta_paths:
+        - ${dirs.raw_data}/aistpp/cl_aistpp_genre5_s1_train.txt
+    val_meta_paths:
+        - ${dirs.raw_data}/aistpp/cl_aistpp_genre5_s1_val.txt
+    # the built-in validation generates full-length dances (slow on small GPUs), so it runs on the 4 val
+    # sequences only; test-set scoring with the style metric: scripts/eval_cl_session.py --session 1
+    test_meta_paths:
+        - ${dirs.raw_data}/aistpp/cl_aistpp_genre5_s1_val.txt
+    feature_path: "motions_272_30fps"
+    token_path: "TOKENS_cl_aistpp_genre5_alltrainvae"
+    music_path: "baseline_feats_window_64"
+    stream_mode: true
+    random_length: 0
+    train_max_tokens: 76 # random 76-token (301-frame, ~10 s) training windows, like FineDance's 300-frame slices
+    min_length: 5
+    max_length: 1500
+
+model:
+    target: models.diffusion_forcing_wan.DiffForcingWanModel
+    ema_decay: 0.99
+    params:
+        input_dim: 4
+        noise_steps: 10
+        max_seq_len: 1024
+        cfg_scale: 5.0
+        prediction_type: "vel"
+        music_dim: 35 # causal librosa features (envelope 1 + MFCC 20 + chroma 12 + peak 1 + beat 1)
+        # History Guidance config
+        use_history_guidance: true
+        history_guidance_scale: 2.5
+        history_drop_out: 0.5
+        history_drop_soft_noise: true
+
+optimizer:
+    target: AdamW
+    params:
+        lr: 1e-3
+        betas: [0.9, 0.99]
+        weight_decay: 0.0
+        eps: 1e-8
+
+lr_scheduler:
+    target: CosineAnnealingLR
+    params:
+        T_max: 1000
+        eta_min: 1e-6

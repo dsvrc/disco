@@ -122,6 +122,24 @@ class BasicLightningModule(LightningModule):
             named_buffers=self.model.named_buffers(),
         )
 
+    def init_from_checkpoint(self, ckpt_path, use_ema=True):
+        """Warm start (continual learning): take only the weights of a previous run's checkpoint.
+        Optimizer, LR schedule and step counter are not touched (they start fresh because trainer.fit gets no
+        ckpt_path), and the EMA is re-initialised from the loaded weights. use_ema=True loads the EMA weights,
+        i.e. exactly the model that was evaluated after the previous session."""
+        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        self.model.load_state_dict(ckpt["state_dict"], strict=True)
+        use_ema = use_ema and "ema_state" in ckpt
+        if use_ema:
+            ema = ExponentialMovingAverage(self.model.parameters(), decay=self.cfg.model.ema_decay)
+            ema.load_state_dict(ckpt["ema_state"])
+            ema.copy_to(self.model.parameters())
+        self.ema = ExponentialMovingAverage(self.model.parameters(), decay=self.cfg.model.ema_decay)
+        rank_zero_info(
+            f"warm start from {ckpt_path} ({'EMA' if use_ema else 'raw'} weights, step {ckpt.get('global_step')}); "
+            "fresh optimizer, LR schedule, step counter and EMA"
+        )
+
     def on_save_checkpoint(self, checkpoint):
         checkpoint["ema_state"] = self.ema.state_dict()
         checkpoint["state_dict"] = self.model.state_dict()

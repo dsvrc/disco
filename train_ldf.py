@@ -484,6 +484,10 @@ def main():
 
     # lightning module, model is inside the lightning module
     model = CustomLightningModule(cfg=cfg.config)
+    # continual learning: session k starts from the weights after session k-1 (init_ckpt), with a fresh
+    # optimizer / LR schedule / step counter; resume_ckpt instead continues an interrupted run of the same session
+    if cfg.train and cfg.get("init_ckpt") and not cfg.resume_ckpt:
+        model.init_from_checkpoint(cfg.init_ckpt, use_ema=cfg.get("init_from_ema", True))
 
     callbacks = []
     checkpoint_callback = ModelCheckpoint(

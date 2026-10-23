@@ -122,7 +122,12 @@ class DiffForcingWanModel(nn.Module):
         noisy_x = x * (1 - noise_level) + noise_level * noise
         return noisy_x, noise
 
-    def forward(self, x):
+    def forward(self, x, per_sample=False, targets=None, return_prediction=False):
+        """Training loss. Continual-learning extras (utils/cl_replay.py):
+        per_sample: also return the per-sample loss vector ("per_sample", (B,)), e.g. for weighted replay
+        targets: per-sample tensors replacing the diffusion target (STAR: reference predictions of the
+            unperturbed model, so the loss becomes the output divergence under the same masks)
+        return_prediction: also return the raw per-sample predictions ("prediction")"""
         feature = x["feature"]  # (B, T, C)
         feature_length = x["feature_length"]  # (B,)
         batch_size, seq_len, _ = feature.shape
@@ -341,12 +346,15 @@ class DiffForcingWanModel(nn.Module):
         )
 
         loss = 0.0
-        
+        sample_losses = []
+
         for b in range(batch_size):
             # Weighted multi-task loss:
             # - Active window (last chunk) is the main objective.
             # - Noisy history (k_t > eps) is an auxiliary denoising objective.
-            if self.prediction_type == "vel":
+            if targets is not None:
+                target = targets[b]
+            elif self.prediction_type == "vel":
                 target = feature_ref[b] - noise_ref[b]
             elif self.prediction_type == "x0":
                 target = feature_ref[b]
@@ -380,9 +388,14 @@ class DiffForcingWanModel(nn.Module):
 
             sample_loss = loss_active + self.history_loss_weight * loss_hist
             loss += sample_loss
+            sample_losses.append(sample_loss)
         loss = loss / batch_size
 
         loss_dict = {"total": loss, "mse": loss}
+        if per_sample:
+            loss_dict["per_sample"] = torch.stack(sample_losses)
+        if return_prediction:
+            loss_dict["prediction"] = [predicted_result[b] for b in range(batch_size)]
         return loss_dict
 
     def _denoise_step_with_history_guidance(

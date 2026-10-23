@@ -58,6 +58,9 @@ class AistPPDataset(Dataset):
                 with open(path, "r") as f:
                     for name in f:
                         name = name.strip()
+                        # optional subset (continual-learning replay clips load only the buffered sequences)
+                        if getattr(self, "name_filter", None) is not None and name not in self.name_filter:
+                            continue
                         if name:
                             data = {}
                             try:

@@ -168,7 +168,7 @@ Both collapse unseen genres onto the training genres (51–76% of windows classi
 | B2 | **Tokenize all five sessions** with the frozen VAE (tokens + reconstructions) | `python pretokenize_vae.py --config configs/cl/vae_aistpp_genre5_alltrain.yaml --override test_ckpt=<vae ckpt>` | after B |
 | C | **S0 diffusion from scratch** | `python train_ldf.py --config configs/cl/ldf_aistpp_genre5_s0.yaml --override train=True --override test_vae_ckpt=<vae ckpt>` | after B2 |
 | C2 | **Score checkpoints** with the style metric (m_{0,0}) and score the VAE ceiling for every session | `python scripts/eval_cl_session.py --config configs/cl/ldf_aistpp_genre5_s0.yaml --vae_ckpt <vae> --ckpt <ldf> --session 0` (add `--vae_recon` for the ceiling) | after C |
-| D | Sessions 1..K per method, warm start + replay buffer | `s{k}` lists + buffer (session loop still to write) | later |
+| D | Sessions 1..K per method, warm start (fresh optimizer) + replay of 10 % of every past session's clips (`utils/cl_replay.py`, buffers by `scripts/build_replay_buffer.py`: random, ocs, gcr, tmr, tmgm, mir, csrel; STAR via `replay.star`) | `bash scripts/cl/run_<method>.sh` (vanilla, random, random_star, ocs, gcr, tmr, tmgm, mir, csrel) | written, smoke-tested on fake data |
 | E | Joint-training upper bound | `joint_train.txt` | later |
 
 Methods, all with the same buffer and steps: Vanilla, TMR (OMP / CoSaMP / SSP), ER, MIR, GCR, CSReL, OCS (+ EWC / C-Flat / SD-LoRA if budget allows). Evaluate after every session on every seen session's test set to fill m_{i,t}.

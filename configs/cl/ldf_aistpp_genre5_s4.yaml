@@ -13,6 +13,19 @@ save_dir: ./outputs
 resume_ckpt: null # continue an interrupted run of THIS session (restores optimizer / step)
 init_ckpt: null # last.ckpt after session 3: weights only, fresh optimizer / LR schedule / step counter
 init_from_ema: true
+cl_session: 4
+# replay of the buffers of sessions 0..3 (utils/cl_replay.py, scripts/build_replay_buffer.py); off by default
+replay:
+    buffer_dir: null # buffers/aistpp_genre5/<method>: replays s0.json .. s3.json
+    weight: 1.0 # lambda of the replay loss
+    use_sample_weights: true # GCR / TMR importance weights (all 1 for the other methods)
+    batch_size: null # buffer clips per step (default data.train_bs)
+    star: # STAR (arXiv:2503.01595) on the buffer batch; ER + STAR values of the paper (Table 8)
+        enable: false
+        lam: 0.1
+        gamma: 0.01
+        eps: 0.001
+        steps: 1
 test_ckpt: null
 test_vae_ckpt: null
 test_vae:

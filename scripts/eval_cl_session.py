@@ -124,7 +124,9 @@ def main() -> int:
     mode = "gt" if a.gt else "vae_recon" if a.vae_recon else "untrained" if a.untrained else "model"
     metrics.update({"session": a.session, "mode": mode,
                     "ckpt": a.ckpt, "vae_ckpt": a.vae_ckpt, "samples": 1 if a.vae_recon else a.samples,
-                    "n_sequences": len(joints), "max_tokens": a.max_tokens, "generation_seconds": round(gen_time, 1)})
+                    "n_sequences": len(joints), "max_tokens": a.max_tokens, "generation_seconds": round(gen_time, 1),
+                    # joints.npz entry q belongs to names[q % len(names)] (sample-major order)
+                    "names": [d["name"] for d in dataset.dataset]})
     noise = json.loads((root / "eval" / "noise.json").read_text())[f"s{a.session}"]
     metrics["gt_reference"] = {k: noise[k] for k in ("StyleRetention_gt", "StyleRetention_complete_forgetting",
                                                       "StyleFD_noise_mean", "StyleFD_complete_forgetting")}

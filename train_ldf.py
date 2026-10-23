@@ -20,6 +20,7 @@ from torch_ema import ExponentialMovingAverage
 from metrics.t2m import T2MMetrics
 from metrics.m2d import M2DMetrics
 
+from utils.cl_replay import STAR, ReplayStream
 from utils.initialize import (
     compare_statedict_and_parameters,
     get_function,
@@ -95,6 +96,44 @@ class CustomLightningModule(BasicLightningModule):
             model_batch["feature_text_end"] = batch["token_text_end"]
         out = self.model(model_batch)
         return out
+
+    def on_train_start(self):
+        # continual learning: replay the buffers of sessions 0..cl_session-1 (utils/cl_replay.py, config `replay`)
+        self.replay, self.star = None, None
+        rcfg = self.cfg.get("replay", None)
+        if rcfg is None or not rcfg.get("buffer_dir"):
+            return
+        self.replay = ReplayStream(
+            self.cfg, rcfg.buffer_dir, self.cfg.cl_session,
+            batch_size=rcfg.get("batch_size") or self.cfg.data.train_bs, num_workers=self.cfg.data.num_workers,
+        )
+        rank_zero_info(f"replay: {self.replay.summary}, loss weight {rcfg.get('weight', 1.0)}")
+        scfg = rcfg.get("star", None)
+        if scfg is not None and scfg.get("enable", False):
+            self.star = STAR(self.model, lam=scfg.lam, gamma=scfg.gamma, eps=scfg.eps, steps=scfg.get("steps", 1))
+            rank_zero_info(f"STAR: lam={scfg.lam} gamma={scfg.gamma} eps={scfg.eps}, {len(self.star.names)} weight tensors")
+
+    def training_step(self, batch, batch_idx):
+        loss = super().training_step(batch, batch_idx)
+        if getattr(self, "replay", None) is None:
+            return loss
+        rcfg = self.cfg.replay
+        replay_batch = self.replay.next(self.device)
+        per_sample = self.model(replay_batch, per_sample=True)["per_sample"]
+        if rcfg.get("use_sample_weights", True):
+            w = torch.tensor(replay_batch["weight"], device=per_sample.device, dtype=per_sample.dtype)
+        else:
+            w = torch.ones_like(per_sample)
+        replay_loss = (w * per_sample).mean()
+        total = loss + rcfg.get("weight", 1.0) * replay_loss
+        bs = len(replay_batch["name"])
+        self.log("train_loss/replay", replay_loss.item(), on_step=True, on_epoch=True, prog_bar=True, batch_size=bs)
+        if self.star is not None:
+            star_loss = self.star.loss(self.model, replay_batch)
+            total = total + star_loss
+            self.log("train_loss/star", star_loss.item(), on_step=True, on_epoch=True, prog_bar=True, batch_size=bs)
+        self.log("train_loss/cl_total", total.item(), on_step=True, on_epoch=False, batch_size=bs)
+        return total
 
     def update_metrics(self, batch):
         with self.ema.average_parameters(self.model.parameters()):

@@ -20,7 +20,7 @@ from torch_ema import ExponentialMovingAverage
 from metrics.t2m import T2MMetrics
 from metrics.m2d import M2DMetrics
 
-from utils.cl_replay import STAR, ReplayStream
+from utils.cl_replay import STAR, ReplayDiagnostics, ReplayStream
 from utils.initialize import (
     compare_statedict_and_parameters,
     get_function,
@@ -106,8 +106,14 @@ class CustomLightningModule(BasicLightningModule):
         self.replay = ReplayStream(
             self.cfg, rcfg.buffer_dir, self.cfg.cl_session,
             batch_size=rcfg.get("batch_size") or self.cfg.data.train_bs, num_workers=self.cfg.data.num_workers,
+            balance=rcfg.get("balance", "uniform"),
         )
         rank_zero_info(f"replay: {self.replay.summary}, loss weight {rcfg.get('weight', 1.0)}")
+        self.replay_diag = ReplayDiagnostics(
+            self.cfg, self.replay, every=int(rcfg.get("diag_every", 1000)), first=int(rcfg.get("diag_first", 3)),
+            probe_clips=int(rcfg.get("probe_clips", 16)),
+        )
+        rank_zero_info(self.replay_diag.startup())
         scfg = rcfg.get("star", None)
         if scfg is not None and scfg.get("enable", False):
             self.star = STAR(self.model, lam=scfg.lam, gamma=scfg.gamma, eps=scfg.eps, steps=scfg.get("steps", 1))
@@ -125,14 +131,33 @@ class CustomLightningModule(BasicLightningModule):
         else:
             w = torch.ones_like(per_sample)
         replay_loss = (w * per_sample).mean()
-        total = loss + rcfg.get("weight", 1.0) * replay_loss
+        replay_term = rcfg.get("weight", 1.0) * replay_loss
+        total = loss + replay_term
         bs = len(replay_batch["name"])
         self.log("train_loss/replay", replay_loss.item(), on_step=True, on_epoch=True, prog_bar=True, batch_size=bs)
+        star_loss = None
         if self.star is not None:
             star_loss = self.star.loss(self.model, replay_batch)
             total = total + star_loss
             self.log("train_loss/star", star_loss.item(), on_step=True, on_epoch=True, prog_bar=True, batch_size=bs)
         self.log("train_loss/cl_total", total.item(), on_step=True, on_epoch=False, batch_size=bs)
+
+        # read-only diagnostics (utils/cl_replay.py ReplayDiagnostics)
+        diag = self.replay_diag
+        diag.record(batch, replay_batch, per_sample.detach().float(), w.detach().float(), loss.item(),
+                    None if star_loss is None else star_loss.item())
+        if diag.due(self.global_step):
+            terms = {"current": loss, "replay": replay_term}
+            if star_loss is not None:
+                terms["star"] = star_loss
+            params = [p for p in self.model.parameters() if p.requires_grad]
+            grads = diag.grad_stats(params, terms)
+            probe = diag.probe(self.model, self.device)
+            rank_zero_info(diag.report(self.global_step, replay_batch, grads, probe))
+            self.log("replay_diag/grad_ratio", grads["|g_replay|"] / max(grads["|g_current|"], 1e-12), batch_size=bs)
+            self.log("replay_diag/grad_cos", grads["cos(current,replay)"], batch_size=bs)
+            for name, v in probe.items():
+                self.log(f"replay_probe/{name.replace(' ', '_')}", v, batch_size=bs)
         return total
 
     def update_metrics(self, batch):

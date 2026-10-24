@@ -7,7 +7,7 @@
 # with the same command.
 #
 #   bash scripts/cl/run_method.sh <method> [first_session=1] [last_session=4]
-#   methods: vanilla | random | random_star | ocs | gcr | tmr | tmgm | mir | csrel
+#   methods: vanilla | random | random_star | ocs | gcr | tmr | mir | csrel
 #
 # Environment overrides: VAE_CKPT, S0_RUN (output folder of the shared session-0 run), RATIO (0.10), SAMPLES (3),
 # MAX_TOKENS (empty = full-length evaluation), EXTRA (more train_ldf.py overrides, e.g. "--override trainer.max_steps=20000").
@@ -30,7 +30,7 @@ case $METHOD in
   vanilla) SELECT= ; STAR=false ;;
   random) SELECT=random ; STAR=false ;;
   random_star) SELECT=random ; STAR=true ;;
-  ocs|gcr|tmr|tmgm|mir|csrel) SELECT=$METHOD ; STAR=false ;;
+  ocs|gcr|tmr|mir|csrel) SELECT=$METHOD ; STAR=false ;;
   *) echo "unknown method $METHOD"; exit 1 ;;
 esac
 
@@ -82,6 +82,7 @@ for k in $(seq "$FIRST" "$LAST"); do
         > "$LOG/buffer_s$j.log" 2>&1
       tail -1 "$LOG/buffer_s$j.log"
     fi
+    cp "$BUF/s$j.json" "$R/buffer_s$j.json"  # keep a copy next to the results (the buffer itself lives in $BUF)
     REPLAY="--override replay.buffer_dir=$BUF --override replay.star.enable=$STAR"
   fi
 

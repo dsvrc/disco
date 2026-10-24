@@ -20,6 +20,10 @@ replay:
     weight: 1.0 # lambda of the replay loss
     use_sample_weights: true # GCR / TMR importance weights (all 1 for the other methods)
     batch_size: null # buffer clips per step (default data.train_bs)
+    balance: uniform # uniform: shuffle the union of the buffers | session: equal clips per previous session per batch
+    diag_every: 1000 # [replay-diag] block every N steps (batch mix, loss / gradient shares, probe losses)
+    diag_first: 3 # ... and on the first N steps
+    probe_clips: 16 # clips per probe set (current, buffered / non-buffered of every previous session)
     star: # STAR (arXiv:2503.01595) on the buffer batch; ER + STAR values of the paper (Table 8)
         enable: false
         lam: 0.1

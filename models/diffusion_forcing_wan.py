@@ -122,24 +122,32 @@ class DiffForcingWanModel(nn.Module):
         noisy_x = x * (1 - noise_level) + noise_level * noise
         return noisy_x, noise
 
-    def forward(self, x, per_sample=False, targets=None, return_prediction=False):
+    def forward(self, x, per_sample=False, targets=None, return_prediction=False, extra_targets=None,
+                time_steps=None):
         """Training loss. Continual-learning extras (utils/cl_replay.py):
         per_sample: also return the per-sample loss vector ("per_sample", (B,)), e.g. for weighted replay
         targets: per-sample tensors replacing the diffusion target (STAR: reference predictions of the
             unperturbed model, so the loss becomes the output divergence under the same masks)
-        return_prediction: also return the raw per-sample predictions ("prediction")"""
+        return_prediction: also return the raw per-sample predictions ("prediction")
+        extra_targets: a second set of per-sample targets scored on the same prediction with the same masks
+            ("per_sample_extra"; distillation replay: the previous model's predictions next to the ground truth)
+        time_steps: (B,) diffusion-forcing times to use instead of random ones (e.g. length / chunk_size: the whole
+            window visible, only the last chunk noisy)"""
         feature = x["feature"]  # (B, T, C)
         feature_length = x["feature_length"]  # (B,)
         batch_size, seq_len, _ = feature.shape
         device = feature.device
 
-        # Randomly use a time step
-        time_steps = []
-        for i in range(batch_size):
-            valid_len = feature_length[i].item()
-            max_time = valid_len / self.chunk_size
-            time_steps.append(torch.FloatTensor(1).uniform_(0, max_time).item())
-        time_steps = torch.tensor(time_steps, device=device)  # (B,)
+        if time_steps is not None:
+            time_steps = torch.as_tensor(time_steps, dtype=torch.float32, device=device)
+        else:
+            # Randomly use a time step
+            time_steps = []
+            for i in range(batch_size):
+                valid_len = feature_length[i].item()
+                max_time = valid_len / self.chunk_size
+                time_steps.append(torch.FloatTensor(1).uniform_(0, max_time).item())
+            time_steps = torch.tensor(time_steps, device=device)  # (B,)
         noise_level = self._get_noise_levels(device, seq_len, time_steps)  # (B, T)
 
         # Encode music condition (CFG training: optionally drop external conditioning)
@@ -346,7 +354,7 @@ class DiffForcingWanModel(nn.Module):
         )
 
         loss = 0.0
-        sample_losses = []
+        sample_losses, extra_losses = [], []
 
         for b in range(batch_size):
             # Weighted multi-task loss:
@@ -380,18 +388,21 @@ class DiffForcingWanModel(nn.Module):
                 current_noise_levels = noise_level[b, :T]
                 mask_history[:hist_end] = (current_noise_levels[:hist_end] > 1e-5).float()
 
-            loss_active = (mse_per_step * mask_active).sum() / (mask_active.sum() + 1e-8)
-            if mask_history.sum() > 0:
-                loss_hist = (mse_per_step * mask_history).sum() / (mask_history.sum() + 1e-8)
-            else:
-                loss_hist = 0.0
+            def masked(mse):
+                active = (mse * mask_active).sum() / (mask_active.sum() + 1e-8)
+                hist = (mse * mask_history).sum() / (mask_history.sum() + 1e-8) if mask_history.sum() > 0 else 0.0
+                return active + self.history_loss_weight * hist
 
-            sample_loss = loss_active + self.history_loss_weight * loss_hist
+            sample_loss = masked(mse_per_step)
             loss += sample_loss
             sample_losses.append(sample_loss)
+            if extra_targets is not None:
+                extra_losses.append(masked(((predicted_result[b] - extra_targets[b]) ** 2).mean(dim=(0, 2, 3))))
         loss = loss / batch_size
 
         loss_dict = {"total": loss, "mse": loss}
+        if extra_targets is not None:
+            loss_dict["per_sample_extra"] = torch.stack(extra_losses)
         if per_sample:
             loss_dict["per_sample"] = torch.stack(sample_losses)
         if return_prediction:

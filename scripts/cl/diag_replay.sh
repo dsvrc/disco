@@ -23,9 +23,10 @@ export PYTHONNOUSERSITE=1
 VAE_CKPT=${VAE_CKPT:-$(ls -d outputs/*_cl_vae_${B}_alltrain | tail -1)/last.ckpt}
 S0_RUN=${S0_RUN:-$(ls -d outputs/*_cl_ldf_${B}_s0 | tail -1)}
 case $METHOD in
-  random_star) STAR=true ;;
-  random|ocs|gcr|tmr|tmgm|mir|csrel) STAR=false ;;
-  *) echo "diag_replay.sh needs a replay method (random, random_star, ocs, gcr, tmr, tmgm, mir, csrel)"; exit 1 ;;
+  random_star) STAR=true ; DISTILL=false ;;
+  random_distill|tmr_dance) STAR=false ; DISTILL=true ;;
+  random|ocs|gcr|tmr|tmgm|mir|csrel) STAR=false ; DISTILL=false ;;
+  *) echo "diag_replay.sh needs a replay method (random, random_star, random_distill, ocs, gcr, tmr, tmr_dance, tmgm, mir, csrel)"; exit 1 ;;
 esac
 BUF=buffers/$B/$METHOD
 LOG=logs/$B/$METHOD
@@ -41,7 +42,7 @@ echo "=== $STEPS-step diagnostic run of S$K from $PREV (balance=$BALANCE, block 
 if ! python train_ldf.py --config configs/cl/ldf_${B}_s$K.yaml --override train=True \
   --override exp_name=cl_ldf_${B}_s${K}_${METHOD}_diag --override save_dir=./outputs/diag \
   --override test_vae_ckpt="$VAE_CKPT" --override init_ckpt="$PREV/last.ckpt" \
-  --override replay.buffer_dir="$BUF" --override replay.star.enable=$STAR --override replay.balance=$BALANCE \
+  --override replay.buffer_dir="$BUF" --override replay.star.enable=$STAR --override replay.distill.enable=$DISTILL --override replay.balance=$BALANCE \
   --override replay.diag_every="$DIAG_EVERY" --override replay.diag_first=3 \
   --override trainer.max_steps="$STEPS" --override validation.validation_steps=1000000 \
   --override validation.save_every_n_steps=1000000 $EXTRA > "$OUT" 2>&1; then

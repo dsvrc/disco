@@ -285,7 +285,9 @@ class ReplayDiagnostics:
         lines += [f"  CHECK FAIL: {p}" for p in problems] or ["  CHECK OK: every previous session is in the replay set"]
         return _tag(lines)
 
-    def record(self, batch, replay_batch, per_sample, weights, loss_cur, star=None):
+    def record(self, batch, replay_batch, per_sample, weights, loss_cur, star=None, replay_term=None, kd=None):
+        """per_sample: ground-truth replay loss per clip; replay_term: the replay part of the objective as optimised
+        (ground truth and / or distillation, weighted); kd: mean distillation loss of the batch (if enabled)."""
         self.n_cur += len(batch["name"])
         for s, ci, l, w in zip(replay_batch["session"], replay_batch["clip_index"], per_sample.tolist(), weights.tolist()):
             self.n_rep[int(s)] += 1
@@ -294,6 +296,10 @@ class ReplayDiagnostics:
             self.win["w"].append(w)
             self.win["wl"].append(w * l)
         self.win["cur"].append(float(loss_cur))
+        if replay_term is not None:
+            self.win["term"].append(float(replay_term))
+        if kd is not None:
+            self.win["kd"].append(float(kd))
         if star is not None:
             self.win["star"].append(float(star))
 
@@ -366,17 +372,22 @@ class ReplayDiagnostics:
                      + f" -> {verdict}")
         cur, rep_w = mean(self.win["cur"]), mean(self.win["wl"])
         rep_terms = ", ".join(f"S{j} {mean(self.win[f'rep{j}']):.3f}" for j in range(k))
-        obj_cur, obj_rep = cur, self.weight * rep_w
+        obj_cur = cur
+        obj_rep = mean(self.win["term"]) if self.win["term"] else self.weight * rep_w
         star = mean(self.win["star"])
-        lines.append(f"  loss (window)  : current {cur:.3f} | replay per session {rep_terms} | weights mean "
-                     f"{mean(self.win['w']):.3f} | weighted replay {rep_w:.3f} x {self.weight}"
+        lines.append(f"  loss (window)  : current {cur:.3f} | replay (ground truth) per session {rep_terms} | weights "
+                     f"mean {mean(self.win['w']):.3f} | weighted replay {rep_w:.3f}"
+                     + (f" | distillation {mean(self.win['kd']):.4f}" if self.win["kd"] else "")
+                     + f" | replay term in the objective {obj_rep:.3f}"
                      + (f" | STAR {star:.5f}" if self.win["star"] else ""))
         frac = obj_rep / max(obj_cur + obj_rep, 1e-12)
         lines.append(f"  loss share     : current {1 - frac:.1%} : replay {frac:.1%} of the objective -> "
                      + ("OK" if 0.25 <= frac <= 0.75 else "WARN one term dominates the objective"))
         if grads:
             gc, gr = grads.get("|g_current|", float("nan")), grads.get("|g_replay|", float("nan"))
-            g_verdict = ("WARN replay gradient is negligible" if gr < 0.1 * gc else
+            kd_zero = bool(self.win["kd"]) and max(self.win["kd"]) < 1e-6
+            g_verdict = ("OK distillation is zero until the model drifts from the previous session" if gr < 0.1 * gc
+                         and kd_zero else "WARN replay gradient is negligible" if gr < 0.1 * gc else
                          "WARN replay gradient dominates" if gr > 10 * gc else "OK replay gradient propagates")
             lines.append("  gradients      : " + " ".join(f"{k_}={v:.4g}" for k_, v in grads.items())
                          + f" | ratio replay/current {gr / max(gc, 1e-12):.2f} -> {g_verdict}")
@@ -479,6 +490,32 @@ def clip_music_features(model, loader, device):
     pad = lambda xs: torch.stack([torch.nn.functional.pad(x, (0, 0, 0, T - x.shape[0])) if x.dim() == 2
                                   else torch.nn.functional.pad(x, (0, T - x.shape[0])) for x in xs])
     return pad(feats), pad(masks).bool(), pad(toks)
+
+
+@torch.no_grad()
+def clip_response_features(model, loader, device, seed=0):
+    """Motion-response trajectories of every clip: the last transformer block's hidden states (T, dim) while the
+    denoiser sees the whole clip with its music (diffusion-forcing time = length / chunk_size: clean history, only the
+    last chunk noisy), zero-padded to the longest clip. Unlike the music trajectory, this differs between dances
+    performed to the same song."""
+    was_training = model.training
+    model.eval()
+    store = {}
+    hook = model.model.blocks[-1].register_forward_hook(lambda mod, inp, out: store.__setitem__("x", out))
+    feats = []
+    try:
+        for batch in loader:
+            mb = model_batch(batch, device)
+            with fixed_rng(seed):
+                model(mb, time_steps=mb["feature_length"].float() / model.chunk_size)
+            x = store["x"].float().cpu()  # (B, seq_len, dim)
+            for i in range(x.shape[0]):
+                feats.append(x[i, : int(batch["token_length"][i])])
+    finally:
+        hook.remove()
+        model.train(was_training)
+    T = max(f.shape[0] for f in feats)
+    return torch.stack([torch.nn.functional.pad(f, (0, 0, 0, T - f.shape[0])) for f in feats])
 
 
 def pooled_clip_features(feats, mask, tokens):

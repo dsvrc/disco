@@ -20,7 +20,7 @@ from torch_ema import ExponentialMovingAverage
 from metrics.t2m import T2MMetrics
 from metrics.m2d import M2DMetrics
 
-from utils.cl_replay import STAR, ReplayDiagnostics, ReplayStream
+from utils.cl_replay import STAR, ReplayDiagnostics, ReplayStream, fixed_rng, load_model
 from utils.initialize import (
     compare_statedict_and_parameters,
     get_function,
@@ -44,6 +44,13 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 # Lightning uses torch.load under the hood when resuming from .ckpt, so we allowlist the
 # OmegaConf types commonly found inside the checkpoint dict.
 torch.serialization.add_safe_globals([DictConfig, ListConfig, ContainerMetadata, Any])
+
+
+class _Frozen:
+    """Holds a frozen module outside nn.Module registration (not saved in checkpoints, not seen by the optimizer)."""
+
+    def __init__(self, module):
+        self.module = module
 
 
 class CustomLightningModule(BasicLightningModule):
@@ -99,7 +106,7 @@ class CustomLightningModule(BasicLightningModule):
 
     def on_train_start(self):
         # continual learning: replay the buffers of sessions 0..cl_session-1 (utils/cl_replay.py, config `replay`)
-        self.replay, self.star = None, None
+        self.replay, self.star, self.teacher = None, None, None
         rcfg = self.cfg.get("replay", None)
         if rcfg is None or not rcfg.get("buffer_dir"):
             return
@@ -118,6 +125,18 @@ class CustomLightningModule(BasicLightningModule):
         if scfg is not None and scfg.get("enable", False):
             self.star = STAR(self.model, lam=scfg.lam, gamma=scfg.gamma, eps=scfg.eps, steps=scfg.get("steps", 1))
             rank_zero_info(f"STAR: lam={scfg.lam} gamma={scfg.gamma} eps={scfg.eps}, {len(self.star.names)} weight tensors")
+        # distillation replay: the previous session's model (init_ckpt, frozen) is the teacher on buffered clips;
+        # loaded from the checkpoint, not copied from self.model, so a resumed run keeps the right teacher
+        dcfg = rcfg.get("distill", None)
+        if dcfg is not None and dcfg.get("enable", False):
+            if not self.cfg.get("init_ckpt"):
+                rank_zero_info("[warn] replay.distill needs init_ckpt (the previous session's model); distillation off")
+            else:
+                teacher = load_model(self.cfg, self.cfg.init_ckpt, self.device, use_ema=self.cfg.get("init_from_ema", True))
+                teacher.requires_grad_(False)
+                self.teacher = _Frozen(teacher)
+                rank_zero_info(f"distillation replay: teacher {self.cfg.init_ckpt}, kd_weight {dcfg.kd_weight}, "
+                               f"gt_weight {dcfg.gt_weight}")
 
     def training_step(self, batch, batch_idx):
         loss = super().training_step(batch, batch_idx)
@@ -125,13 +144,33 @@ class CustomLightningModule(BasicLightningModule):
             return loss
         rcfg = self.cfg.replay
         replay_batch = self.replay.next(self.device)
-        per_sample = self.model(replay_batch, per_sample=True)["per_sample"]
+        kd = None
+        if self.teacher is not None:
+            # teacher and student see identical diffusion times, noise and condition dropout (same seed): the
+            # distillation term is the student's deviation from the previous model on the buffered clips, zero at
+            # the start of the session, with fresh noise every step (nothing to memorise)
+            seed = int(torch.randint(0, 2**31 - 1, (1,)).item())
+            teacher = self.teacher.module
+            teacher.train(self.model.training)
+            with torch.no_grad(), fixed_rng(seed):
+                ref = [p.detach() for p in teacher(replay_batch, return_prediction=True)["prediction"]]
+            with fixed_rng(seed):
+                out = self.model(replay_batch, per_sample=True, extra_targets=ref)
+            per_sample, kd = out["per_sample"], out["per_sample_extra"]
+        else:
+            per_sample = self.model(replay_batch, per_sample=True)["per_sample"]
         if rcfg.get("use_sample_weights", True):
             w = torch.tensor(replay_batch["weight"], device=per_sample.device, dtype=per_sample.dtype)
         else:
             w = torch.ones_like(per_sample)
         replay_loss = (w * per_sample).mean()
-        replay_term = rcfg.get("weight", 1.0) * replay_loss
+        if kd is not None:
+            kd_loss = (w * kd).mean()
+            replay_term = rcfg.get("weight", 1.0) * (rcfg.distill.gt_weight * replay_loss + rcfg.distill.kd_weight * kd_loss)
+            self.log("train_loss/replay_kd", kd_loss.item(), on_step=True, on_epoch=True, prog_bar=True,
+                     batch_size=len(replay_batch["name"]))
+        else:
+            replay_term = rcfg.get("weight", 1.0) * replay_loss
         total = loss + replay_term
         bs = len(replay_batch["name"])
         self.log("train_loss/replay", replay_loss.item(), on_step=True, on_epoch=True, prog_bar=True, batch_size=bs)
@@ -145,7 +184,8 @@ class CustomLightningModule(BasicLightningModule):
         # read-only diagnostics (utils/cl_replay.py ReplayDiagnostics)
         diag = self.replay_diag
         diag.record(batch, replay_batch, per_sample.detach().float(), w.detach().float(), loss.item(),
-                    None if star_loss is None else star_loss.item())
+                    None if star_loss is None else star_loss.item(), replay_term=replay_term.item(),
+                    kd=None if kd is None else float((w * kd).mean().detach()))
         if diag.due(self.global_step):
             terms = {"current": loss, "replay": replay_term}
             if star_loss is not None:

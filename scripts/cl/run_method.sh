@@ -7,7 +7,8 @@
 # with the same command.
 #
 #   bash scripts/cl/run_method.sh <method> [first_session=1] [last_session=4]
-#   methods: vanilla | random | random_star | ocs | gcr | tmr | tmgm | mir | csrel
+#   methods: vanilla | random | random_star | random_distill | ocs | gcr | tmr | tmr_dance | tmgm | mir | csrel
+#   (tmr_dance = TMR-dance selection + distillation replay; random_distill = random selection + distillation)
 #
 # Environment overrides: VAE_CKPT, S0_RUN (output folder of the shared session-0 run), RATIO (0.10), SAMPLES (3),
 # MAX_TOKENS (empty = full-length evaluation), EXTRA (more train_ldf.py overrides, e.g. "--override trainer.max_steps=20000").
@@ -27,10 +28,12 @@ VAE_CKPT=${VAE_CKPT:-$(ls -d outputs/*_cl_vae_${B}_alltrain | tail -1)/last.ckpt
 S0_RUN=${S0_RUN:-$(ls -d outputs/*_cl_ldf_${B}_s0 | tail -1)}
 
 case $METHOD in
-  vanilla) SELECT= ; STAR=false ;;
-  random) SELECT=random ; STAR=false ;;
-  random_star) SELECT=random ; STAR=true ;;
-  ocs|gcr|tmr|tmgm|mir|csrel) SELECT=$METHOD ; STAR=false ;;
+  vanilla) SELECT= ; STAR=false ; DISTILL=false ;;
+  random) SELECT=random ; STAR=false ; DISTILL=false ;;
+  random_star) SELECT=random ; STAR=true ; DISTILL=false ;;
+  random_distill) SELECT=random ; STAR=false ; DISTILL=true ;;
+  tmr_dance) SELECT=tmr_dance ; STAR=false ; DISTILL=true ;;
+  ocs|gcr|tmr|tmgm|mir|csrel) SELECT=$METHOD ; STAR=false ; DISTILL=false ;;
   *) echo "unknown method $METHOD"; exit 1 ;;
 esac
 
@@ -83,7 +86,7 @@ for k in $(seq "$FIRST" "$LAST"); do
       tail -1 "$LOG/buffer_s$j.log"
     fi
     cp "$BUF/s$j.json" "$R/buffer_s$j.json"  # keep a copy next to the results (the buffer itself lives in $BUF)
-    REPLAY="--override replay.buffer_dir=$BUF --override replay.star.enable=$STAR"
+    REPLAY="--override replay.buffer_dir=$BUF --override replay.star.enable=$STAR --override replay.distill.enable=$DISTILL"
   fi
 
   # a session counts as trained once its own test set has been scored (also covers earlier runs of this method)

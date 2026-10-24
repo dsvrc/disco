@@ -15,6 +15,14 @@ training sequence); the buffer keeps --ratio (10 %) of them. Methods (adapted fr
   tmgm    the same idea as built by the earlier TMGM builder (build_replay_buffer_tmgm.py), on the same trajectories:
           its own BIC, whitening, random projection to proj_dim, regularised OMP towards the sum of the normalised
           atoms, random fill to the budget; its weights weight the replay loss
+  tmr_dance  TMR for dance models: the same core (temporal operator, BIC rank, whitened modal atoms, simplex OMP),
+          with three changes for music-to-dance data, where many dances share one song (AIST++: ~19 per song) so music
+          trajectories cannot tell them apart: (1) motion-aware trajectories, the music trajectory next to the
+          denoiser's hidden-state trajectory on the clip, each block scaled to equal weight; (2) at most one clip per
+          dance (per-sequence OMP quota), filled by k-center coverage if OMP stops early; (3) keep the modes that
+          explain 90 % of the temporal variance (tmr's BIC with N_eff = #clips x dims keeps nearly every mode, so
+          whitening amplifies noise directions) and uniform replay weights. Pair it with
+          distillation replay at training time (replay.distill). Each change has a flag for ablations (--dance_*).
   mir     MIR as a buffer criterion: positive interference (loss increase of a clip after one virtual update on
           a training batch of the same session), averaged over several virtual updates per clip
   csrel   CSReL (reducible loss): t_out rounds; each round trains the pre-session model on the current coreset
@@ -41,8 +49,9 @@ import torch
 from torch.utils.data import Subset
 
 sys.path.insert(0, os.getcwd())
-from utils.cl_replay import (ClipDataset, clip_loader, clip_losses, clip_music_features, fixed_rng, load_model,
-                             model_batch, omp_select, pooled_clip_features, save_buffer, weights_to_selection)
+from utils.cl_replay import (ClipDataset, clip_loader, clip_losses, clip_music_features, clip_response_features,
+                             fixed_rng, load_model, model_batch, omp_select, pooled_clip_features, save_buffer,
+                             weights_to_selection)
 from utils.initialize import load_config
 
 
@@ -106,6 +115,75 @@ def select_tmr(temporal, mask, budget, rng, stop="fw", **_):
     if len(idx) < budget:
         print(f"[tmr] stopped early: no further clip lowers the modal error (Algorithm 1); buffer has {len(idx)} clips")
     return idx.tolist(), (np.asarray(w) * len(idx)).tolist(), None
+
+
+def _pad_to(x, T):
+    return torch.nn.functional.pad(x, (0, 0, 0, T - x.shape[1])) if x.dim() == 3 else torch.nn.functional.pad(x, (0, T - x.shape[1]))
+
+
+def balanced_blocks(blocks, mask):
+    """Concatenate trajectory blocks (N, T, D_b) along channels, each scaled to unit mean squared deviation per valid
+    token so every block carries the same weight in the temporal operator."""
+    m = mask.float()
+    out = []
+    for g in blocks:
+        g = g.float()
+        bar = (g * m[..., None]).sum(0) / m.sum(0).clamp(min=1)[:, None]
+        dev = (((g - bar) ** 2).sum(-1) * m).sum() / m.sum().clamp(min=1)
+        out.append(g / dev.sqrt().clamp(min=1e-12))
+    return torch.cat(out, -1) * m[..., None]
+
+
+def select_tmr_dance(blocks, mask, groups, budget, rng, per_dance=1, rank="energy", energy=0.9, weights="uniform",
+                     stop="fw", **_):
+    """TMR core (tmr_select: temporal operator, rank, whitened modal atoms, simplex-constrained OMP) on motion-aware
+    trajectories, with at most `per_dance` clips per dance (0 = no limit) and k-center fill to the budget.
+    rank: energy = fewest modes explaining `energy` of the temporal variance | bic_clips = BIC with N_eff = #clips |
+    bic_dims = BIC with N_eff = #clips x channels (tmr's choice, which keeps nearly every mode)."""
+    sys.path.insert(0, os.path.join(os.getcwd(), "scripts", "evidence"))
+    import tmr_select
+
+    phi = balanced_blocks(blocks, mask)
+    N, T, D = phi.shape
+    lam_, U = tmr_select.eig_desc(temporal_operator_masked(phi, mask).numpy())
+    M_clips, M_dims = tmr_select.bic_rank(lam_, N)[0], tmr_select.bic_rank(lam_, N * D)[0]
+    M_energy = int(np.searchsorted(np.cumsum(lam_) / lam_.sum(), energy) + 1)
+    M = {"energy": M_energy, "bic_clips": M_clips, "bic_dims": M_dims}[rank]
+    Z, _ = tmr_select.modal_dictionary(phi.numpy(), "temporal", ops={"lam": lam_, "U": U}, M=M)
+    groups = np.asarray(groups)
+    quotas = {int(g): per_dance for g in np.unique(groups)} if per_dance > 0 else None
+    idx, w, hist = tmr_select.omp_simplex(Z, budget, groups if quotas else None, quotas, stop=stop, trace=True)
+    idx, n_omp = [int(i) for i in idx], len(idx)
+    modal_w = dict(zip(idx, (np.asarray(w) * max(len(idx), 1)).tolist()))
+    if len(idx) < budget:  # k-center fill: the clip farthest (in modal space) from the buffer, from an unused dance
+        Zd = Z.astype(np.float64)
+        dmin = np.full(N, np.inf)
+        for s in idx:
+            dmin = np.minimum(dmin, np.linalg.norm(Zd - Zd[s], axis=1))
+        count = {}
+        for i in idx:
+            count[groups[i]] = count.get(groups[i], 0) + 1
+        while len(idx) < budget:
+            ok = np.array([i not in modal_w and (per_dance <= 0 or count.get(groups[i], 0) < per_dance) for i in range(N)])
+            if not ok.any():
+                break
+            j = int(np.argmax(np.where(ok, dmin if idx else 0.0, -np.inf)))
+            idx.append(j)
+            modal_w[j] = 0.0
+            count[groups[j]] = count.get(groups[j], 0) + 1
+            dmin = np.minimum(dmin, np.linalg.norm(Zd - Zd[j], axis=1))
+    wts = [1.0] * len(idx) if weights == "uniform" else [max(modal_w[i], 1e-3) for i in idx]
+    s = sum(wts)
+    wts = [v / s * len(wts) for v in wts]
+    print(f"[tmr_dance] T={T} channels={D} (blocks {[b.shape[-1] for b in blocks]}): M={M} modes by {rank} "
+          f"({energy:.0%} energy: {M_energy}, BIC N_eff=N: {M_clips}, BIC N_eff=N*D: {M_dims}; "
+          f"{lam_[:M].sum() / lam_.sum():.1%} of temporal variance); OMP picked {n_omp}/{budget}"
+          + (f", k-center fill {len(idx) - n_omp}" if len(idx) > n_omp else "")
+          + f"; modal error {hist[0]:.3f} -> {hist[-1]:.3f}; {len(set(groups[idx].tolist()))} dances; weights {weights}")
+    score = torch.full((N,), float("nan"))
+    for i in idx:
+        score[i] = modal_w[i]  # stored as each clip's "score": its OMP (simplex) weight, 0 for k-center fill
+    return idx, wts, score
 
 
 def bic_tmgm(lam_, N, T):
@@ -223,7 +301,8 @@ def select_csrel(model, init_model, cands, budget, rng, device, rounds=5, steps=
 # ----------------------------------------------------------------------------------------------
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--method", required=True, choices=["random", "ocs", "gcr", "tmr", "tmgm", "mir", "csrel"])
+    ap.add_argument("--method", required=True,
+                    choices=["random", "ocs", "gcr", "tmr", "tmr_dance", "tmgm", "mir", "csrel"])
     ap.add_argument("--config", required=True, help="config of the session whose buffer is built (its train list)")
     ap.add_argument("--ckpt", help="model after this session (not needed for random)")
     ap.add_argument("--prev_ckpt", default=None, help="csrel: model before this session (default: fresh init)")
@@ -235,6 +314,15 @@ def main() -> int:
     ap.add_argument("--omp_lam", type=float, default=0.5)
     ap.add_argument("--tmr_stop", choices=["fw", "positive"], default="fw", help="tmr: OMP stopping rule (tmr_select)")
     ap.add_argument("--proj_dim", type=int, default=4096, help="tmgm: random projection of the modal coefficients")
+    ap.add_argument("--dance_traj", choices=["response", "latent", "music"], default="response",
+                    help="tmr_dance trajectories: music + denoiser hidden states | music + VAE latents | music only")
+    ap.add_argument("--dance_per_dance", type=int, default=1, help="tmr_dance: max clips per dance (0 = no limit)")
+    ap.add_argument("--dance_rank", choices=["energy", "bic_clips", "bic_dims"], default="energy",
+                    help="tmr_dance modes: explaining --dance_energy of the temporal variance | BIC with N_eff = #clips"
+                         " | BIC with N_eff = #clips x channels (tmr's choice)")
+    ap.add_argument("--dance_energy", type=float, default=0.9)
+    ap.add_argument("--dance_weights", choices=["uniform", "modal"], default="uniform",
+                    help="tmr_dance replay weights: uniform | the OMP simplex weights")
     ap.add_argument("--ocs_batch", type=int, default=128)
     ap.add_argument("--mir_cand", type=int, default=50)
     ap.add_argument("--mir_vbatch", type=int, default=16)
@@ -277,6 +365,19 @@ def main() -> int:
     elif method == "tmgm":
         temporal, mask, _ = clip_music_features(model, loader, device)
         idx, wts, score = select_tmgm(temporal, mask, lam=a.omp_lam, proj_dim=a.proj_dim, **kw)
+    elif method == "tmr_dance":
+        music, mask, tokens = clip_music_features(model, loader, device)
+        blocks = [music]
+        if a.dance_traj == "response":
+            blocks.append(clip_response_features(model, loader, device, seed=a.seed))
+        elif a.dance_traj == "latent":
+            blocks.append(tokens)
+        T = max(b.shape[1] for b in blocks)
+        blocks, mask = [_pad_to(b, T) for b in blocks], _pad_to(mask.float(), T).bool()
+        dance_id = {n: i for i, n in enumerate(sorted({c["name"] for c in cands.clips}))}
+        idx, wts, score = select_tmr_dance(blocks, mask, [dance_id[c["name"]] for c in cands.clips],
+                                           per_dance=a.dance_per_dance, rank=a.dance_rank, energy=a.dance_energy,
+                                           weights=a.dance_weights, stop=a.tmr_stop, **kw)
     elif method == "mir":
         from datasets.aistpp import AistPPDataset
         train_set = AistPPDataset(cfg.config, split="train")  # random training windows, as in training
@@ -299,7 +400,7 @@ def main() -> int:
     save_buffer(a.out, clips, method=method, session=a.session, ratio=a.ratio, list_path=list_path,
                 n_candidates=N, budget=budget, candidate_tokens=cand_tokens, buffer_tokens=buf_tokens,
                 n_sequences=len({c["name"] for c in clips}), ckpt=a.ckpt, prev_ckpt=a.prev_ckpt, seed=a.seed,
-                params={k: v for k, v in vars(a).items() if k.split("_")[0] in ("omp", "proj", "ocs", "tmr", "mir", "csrel")},
+                params={k: v for k, v in vars(a).items() if k.split("_")[0] in ("omp", "proj", "ocs", "tmr", "dance", "mir", "csrel")},
                 seconds=round(time.time() - t0, 1))
     w = np.array(wts)
     print(f"saved {a.out}: {len(clips)} clips from {len({c['name'] for c in clips})} sequences, "

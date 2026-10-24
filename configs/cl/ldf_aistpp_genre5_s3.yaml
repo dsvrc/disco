@@ -24,6 +24,10 @@ replay:
     diag_every: 1000 # [replay-diag] block every N steps (batch mix, loss / gradient shares, probe losses)
     diag_first: 3 # ... and on the first N steps
     probe_clips: 16 # clips per probe set (current, buffered / non-buffered of every previous session)
+    distill: # distillation replay (TMR-dance): match the previous session's model on buffered clips, fresh noise
+        enable: false
+        kd_weight: 1.0 # weight of the distillation term
+        gt_weight: 0.25 # weight of the ground-truth replay term kept beside it (DER++-style)
     star: # STAR (arXiv:2503.01595) on the buffer batch; ER + STAR values of the paper (Table 8)
         enable: false
         lam: 0.1

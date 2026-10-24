@@ -24,8 +24,8 @@ VAE_CKPT=${VAE_CKPT:-$(ls -d outputs/*_cl_vae_${B}_alltrain | tail -1)/last.ckpt
 S0_RUN=${S0_RUN:-$(ls -d outputs/*_cl_ldf_${B}_s0 | tail -1)}
 case $METHOD in
   random_star) STAR=true ;;
-  random|ocs|gcr|tmr|mir|csrel) STAR=false ;;
-  *) echo "diag_replay.sh needs a replay method (random, random_star, ocs, gcr, tmr, mir, csrel)"; exit 1 ;;
+  random|ocs|gcr|tmr|tmgm|mir|csrel) STAR=false ;;
+  *) echo "diag_replay.sh needs a replay method (random, random_star, ocs, gcr, tmr, tmgm, mir, csrel)"; exit 1 ;;
 esac
 BUF=buffers/$B/$METHOD
 LOG=logs/$B/$METHOD

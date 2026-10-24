@@ -7,7 +7,7 @@
 # with the same command.
 #
 #   bash scripts/cl/run_method.sh <method> [first_session=1] [last_session=4]
-#   methods: vanilla | random | random_star | ocs | gcr | tmr | mir | csrel
+#   methods: vanilla | random | random_star | ocs | gcr | tmr | tmgm | mir | csrel
 #
 # Environment overrides: VAE_CKPT, S0_RUN (output folder of the shared session-0 run), RATIO (0.10), SAMPLES (3),
 # MAX_TOKENS (empty = full-length evaluation), EXTRA (more train_ldf.py overrides, e.g. "--override trainer.max_steps=20000").
@@ -30,7 +30,7 @@ case $METHOD in
   vanilla) SELECT= ; STAR=false ;;
   random) SELECT=random ; STAR=false ;;
   random_star) SELECT=random ; STAR=true ;;
-  ocs|gcr|tmr|mir|csrel) SELECT=$METHOD ; STAR=false ;;
+  ocs|gcr|tmr|tmgm|mir|csrel) SELECT=$METHOD ; STAR=false ;;
   *) echo "unknown method $METHOD"; exit 1 ;;
 esac
 

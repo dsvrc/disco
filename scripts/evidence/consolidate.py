@@ -130,7 +130,8 @@ class Report:
 
     def latex(self, label: str, caption: str, header: list[str], rows: list[list], align: str | None = None):
         align = align or "l" + "c" * (len(header) - 1)
-        esc = lambda s: str(s).replace("%", "\\%").replace("_", "\\_") if not str(s).startswith("$") else str(s)
+        # escape _ and % outside math, leaving already-escaped ones alone
+        esc = lambda s: str(s) if str(s).startswith("$") else re.sub(r"(?<!\\)([_%])", r"\\\1", str(s))
         self.tex += [f"% ---- {label} ----", "\\begin{table}[t]", "\\centering", "\\small",
                      f"\\caption{{{caption}}}", f"\\label{{{label}}}", "\\resizebox{\\linewidth}{!}{%",
                      f"\\begin{{tabular}}{{{align}}}", "\\toprule", " & ".join(esc(h) for h in header) + "\\\\",
@@ -245,7 +246,7 @@ def theory_e2(R: Report, e2: dict):
         sec = [r.get("seconds") for r in per]
         pctl = [r.get("delta_percentile_among_random") for r in per]
         rows.append([n, f(rel, 2), f(nmean(rel), 2), f(pctl, 2), f(gap, 2), f(kap, 2), f(nmean(sec), 1)])
-        tex_rows.append([n.replace("_", "\\_"), f(nmean(rel), 2), f(nmean(gap), 2), f(nmean(kap), 2), f(nmean(sec), 1)])
+        tex_rows.append([n, f(nmean(rel), 2), f(nmean(gap), 2), f(nmean(kap), 2), f(nmean(sec), 1)])
     tmr_rel = nmean([e["rules"]["tmr"].get("delta_rel_random") for e in e2.values()])
     noise = [e["calibration"].get("noise_share_of_naive_delta2") for e in e2.values()]
     ok = None if tmr_rel is None else bool(tmr_rel < 1)
@@ -371,7 +372,9 @@ def mechanisms(R: Report, e1: dict, e2: dict, e4: dict | None):
                 "denoising loss splits exactly into drift of the unconditional motion prior ($\\Delta L^{\\mathrm{null}}$) "
                 "and lost audio grounding ($-\\Delta G$, $G=L^{\\mathrm{null}}-L^{\\mathrm{cond}}$).",
                 ["old session / after", "$\\Delta L^{\\mathrm{cond}}$", "$\\Delta L^{\\mathrm{null}}$", "$-\\Delta G$",
-                 "grounding share", "$G$ retained"], [[r[0].replace("@", " / ").replace("_", " ")] + r[1:] for r in rows])
+                 "grounding share", "$G$ retained"],
+                [[r[0].replace("@", " / ").replace("_", " ")] + r[1:5] + [r[5] if not r[5].startswith("n/a") else "n/a"]
+                 for r in rows])
         R.p("*Paper:* Sec. 1 (diagnosis paragraph next to Fig. 1) and Sec. 4.4 -- this is the strongest new finding "
             "candidate. *Figure:* `e4_trajectory.pdf` panels (b, c).")
         R.summary["median_grounding_share"] = med

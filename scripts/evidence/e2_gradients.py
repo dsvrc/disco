@@ -152,9 +152,13 @@ def figures(res: dict, out: Path, k: int) -> None:
     ax[0].set_xticklabels(blocks, rotation=40, ha="right", fontsize=7)
     plt.colorbar(im, ax=ax[0])
     share = np.array([[an[j]["blocks"][b]["interference_gd"] for b in blocks] for j in olds])
-    for r, j in enumerate(olds):
-        ax[1].barh([f"S{j}"] * len(blocks), share[r], left=np.concatenate([[0], np.cumsum(share[r])[:-1]]),
+    for r, j in enumerate(olds):  # positive parts stacked to the right of 0, negative parts to the left
+        pos, neg = np.clip(share[r], 0, None), np.clip(share[r], None, 0)
+        ax[1].barh([f"S{j}"] * len(blocks), pos, left=np.concatenate([[0], np.cumsum(pos)[:-1]]),
                    color=[f"C{i}" for i in range(len(blocks))])
+        ax[1].barh([f"S{j}"] * len(blocks), neg, left=np.concatenate([[0], np.cumsum(neg)[:-1]]),
+                   color=[f"C{i}" for i in range(len(blocks))])
+    ax[1].axvline(0, color="k", lw=.6)
     ax[1].legend([plt.Rectangle((0, 0), 1, 1, color=f"C{i}") for i in range(len(blocks))], blocks, fontsize=6)
     ax[1].set(xlabel="$-\\langle g_j^b, g_k^b\\rangle$ (first-order forgetting, Eq. 4)", title="interference by block")
     E.savefig(fig, out / f"e2_anatomy_k{k}")

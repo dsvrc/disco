@@ -630,7 +630,9 @@ def common_args(ap, need_runs: bool = True):
         ap.add_argument("--run", action="append", default=[], help="k=<run dir> to override session k's run dir")
         ap.add_argument("--allow_incomplete", action="store_true",
                         help="also use sessions whose last step checkpoint is below trainer.max_steps")
-    ap.add_argument("--T", type=int, default=60, help="window length in VAE tokens (60 = 240 frames = 8 s)")
+    ap.add_argument("--T", type=int, default=None,
+                    help="window length in VAE tokens (default: data.train_max_tokens, the training window and the "
+                         "clip length of utils/cl_replay.py's replay buffers; 76 = ~10 s)")
     ap.add_argument("--pool_mode", choices=["mean", "last"], default="mean",
                     help="pooling of music_embedding over the causal music window")
     ap.add_argument("--max_windows", type=int, default=None, help="cap on windows per session (default: all)")
@@ -650,7 +652,16 @@ def finish_args(a):
     return a
 
 
+def resolve_T(a, cfg) -> None:
+    a.T = a.T or int(cfg.data.get("train_max_tokens") or 60)
+
+
 def runs_of(a, cfg) -> dict[int, Path]:
-    """Finished session run dirs (see find_run_dirs)."""
-    return find_run_dirs(a.outputs, a.exp_prefix, a.run,
+    """Finished session run dirs (see find_run_dirs); also fixes the default window length."""
+    resolve_T(a, cfg)
+    runs = find_run_dirs(a.outputs, a.exp_prefix, a.run,
                          max_steps=None if a.allow_incomplete else int(cfg.trainer.max_steps))
+    if not runs:
+        raise SystemExit(f"no finished session runs {a.outputs}/*_{a.exp_prefix}_s<k> (last.ckpt and a step checkpoint "
+                         f"at trainer.max_steps={cfg.trainer.max_steps}); --allow_incomplete or --run k=<dir> to override")
+    return runs

@@ -9,11 +9,10 @@ training sequence); the buffer keeps --ratio (10 %) of them. Methods (adapted fr
   random  uniform sample (ER)
   ocs     coreset by Similarity + Diversity of pooled clip features, scored per minibatch (OCS-style)
   gcr     GCR, feature-based: OMP on pooled clip features towards their sum; OMP weights weight the replay loss
-  tmr     TMR (ours), paper Algorithm 1 via scripts/evidence/tmr_select.py: temporal music trajectories phi_i
-          (WanModel.music_embedding mean-pooled over the causal window, at the token rate) -> temporal operator ->
-          M modes by PPCA BIC -> whitened modal atoms -> simplex-constrained OMP; its weights weight the replay loss
-  tmgm    the earlier TMGM builder (build_replay_buffer_tmgm.py) on the same trajectories: its own BIC, random
-          projection, regularised OMP towards the summed normalised atoms, random fill; weights
+  tmr     TMR (ours; called TMGM in the earlier builders), paper Algorithm 1 via scripts/evidence/tmr_select.py:
+          temporal music trajectories phi_i (WanModel.music_embedding mean-pooled over the causal window, at the token
+          rate) -> temporal operator -> M modes by PPCA BIC -> whitened modal atoms -> simplex-constrained OMP; its
+          weights weight the replay loss
   mir     MIR as a buffer criterion: positive interference (loss increase of a clip after one virtual update on
           a training batch of the same session), averaged over several virtual updates per clip
   csrel   CSReL (reducible loss): t_out rounds; each round trains the pre-session model on the current coreset
@@ -107,42 +106,6 @@ def select_tmr(temporal, mask, budget, rng, stop="fw", **_):
     return idx.tolist(), (np.asarray(w) * len(idx)).tolist(), None
 
 
-def bic_tmgm(lam_, N, T):
-    """Number of modes by the BIC of the reference TMGM builder (build_replay_buffer_tmgm.py)."""
-    trace_C = lam_.sum()
-    total_var = trace_C / T
-    bic = []
-    for p in range(1, T + 1):
-        sigma = torch.clamp((trace_C - lam_[:p].sum()) / T, min=1e-8)
-        penalty = math.log(N) * p * float((lam_[p:] ** 2).sum() / total_var)
-        bic.append(float(torch.log(sigma)) + penalty)
-    return int(np.argmin(bic)) + 1
-
-
-def select_tmgm(temporal, mask, budget, rng, lam=0.5, proj_dim=4096, seed=0, **_):
-    """The reference TMGM builder: temporal covariance -> M by its BIC -> whitened modal coefficients -> random
-    projection to proj_dim -> regularised OMP towards the sum of the normalised atoms (random fill to the budget)."""
-    N, T, D = temporal.shape
-    C = temporal_operator_masked(temporal, mask)
-    lam_, U = torch.linalg.eigh(C)
-    lam_, U = lam_.flip(0).clamp(min=0), U.flip(1)
-    M = bic_tmgm(lam_, N, T)
-    if M >= 0.9 * T:
-        print(f"[tmgm] WARNING: its BIC keeps M={M} of T={T} modes; whitening then amplifies near-zero modes "
-              f"(smallest kept eigenvalue {float(lam_[M - 1]):.2e} vs largest {float(lam_[0]):.2e})")
-    beta = torch.einsum("tm,ntd->nmd", U[:, :M], (temporal * mask[..., None]).double())  # modal coefficients
-    flat = (beta / (lam_[:M].sqrt() + 1e-8).view(1, M, 1)).reshape(N, M * D)  # whitened
-    if flat.shape[1] > proj_dim:
-        gen = torch.Generator().manual_seed(seed)
-        flat = flat @ (torch.randn(flat.shape[1], proj_dim, generator=gen, dtype=flat.dtype) / math.sqrt(proj_dim))
-    flat = torch.nn.functional.normalize(flat, dim=1)
-    w = omp_select(flat.T, flat.sum(0), budget, lam=lam)
-    idx, wts = weights_to_selection(w, budget, rng)
-    print(f"[tmgm] T={T} D={D}: M={M} modes ({float(lam_[:M].sum() / lam_.sum()):.1%} of temporal variance), "
-          f"OMP picked {int((w > 0).sum())}/{budget} before the random fill")
-    return idx, wts, None
-
-
 def select_mir(model, cands, train_set, budget, rng, device, lr, cand_size=50, vbatch=16, evals=3, update="adam",
                seeds=(0, 1, 2, 3), **_):
     N = len(cands)
@@ -222,7 +185,7 @@ def select_csrel(model, init_model, cands, budget, rng, device, rounds=5, steps=
 # ----------------------------------------------------------------------------------------------
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--method", required=True, choices=["random", "ocs", "gcr", "tmr", "tmgm", "mir", "csrel"])
+    ap.add_argument("--method", required=True, choices=["random", "ocs", "gcr", "tmr", "mir", "csrel"])
     ap.add_argument("--config", required=True, help="config of the session whose buffer is built (its train list)")
     ap.add_argument("--ckpt", help="model after this session (not needed for random)")
     ap.add_argument("--prev_ckpt", default=None, help="csrel: model before this session (default: fresh init)")
@@ -232,7 +195,6 @@ def main() -> int:
     ap.add_argument("--clip_len", type=int, default=None, help="tokens per clip (default data.train_max_tokens)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--omp_lam", type=float, default=0.5)
-    ap.add_argument("--proj_dim", type=int, default=4096, help="tmgm: random projection of the modal coefficients")
     ap.add_argument("--tmr_stop", choices=["fw", "positive"], default="fw", help="tmr: OMP stopping rule (tmr_select)")
     ap.add_argument("--ocs_batch", type=int, default=128)
     ap.add_argument("--mir_cand", type=int, default=50)
@@ -273,9 +235,6 @@ def main() -> int:
     elif method == "tmr":
         temporal, mask, _ = clip_music_features(model, loader, device)
         idx, wts, score = select_tmr(temporal, mask, stop=a.tmr_stop, **kw)
-    elif method == "tmgm":
-        temporal, mask, _ = clip_music_features(model, loader, device)
-        idx, wts, score = select_tmgm(temporal, mask, lam=a.omp_lam, proj_dim=a.proj_dim, **kw)
     elif method == "mir":
         from datasets.aistpp import AistPPDataset
         train_set = AistPPDataset(cfg.config, split="train")  # random training windows, as in training
@@ -298,7 +257,7 @@ def main() -> int:
     save_buffer(a.out, clips, method=method, session=a.session, ratio=a.ratio, list_path=list_path,
                 n_candidates=N, budget=budget, candidate_tokens=cand_tokens, buffer_tokens=buf_tokens,
                 n_sequences=len({c["name"] for c in clips}), ckpt=a.ckpt, prev_ckpt=a.prev_ckpt, seed=a.seed,
-                params={k: v for k, v in vars(a).items() if k.split("_")[0] in ("omp", "proj", "ocs", "tmr", "mir", "csrel")},
+                params={k: v for k, v in vars(a).items() if k.split("_")[0] in ("omp", "ocs", "tmr", "mir", "csrel")},
                 seconds=round(time.time() - t0, 1))
     w = np.array(wts)
     print(f"saved {a.out}: {len(clips)} clips from {len({c['name'] for c in clips})} sequences, "

@@ -66,7 +66,7 @@ rule selects on real data (A3). If your server implementation uses the literal f
 ## Running on the server
 
 - **Inputs.** Run dirs `outputs/<time>_cl_ldf_aistpp_genre5_s{k}/` with `last.ckpt` and the `step_step=*.ckpt` files, `raw_data/cl_sessions/aistpp_genre5` (manifest, lists, `_style_encoder/`), tokens and music features of the frozen VAE, and the wavs (tempo and BAS).
-- **Settings.** EMA weights, fp32 everywhere (TF32 off, fp32 attention in place of the bf16 kernels, because loss differences of 1e-4 are measured). Windows are non-overlapping 60-token (8 s) crops, the same crops the model trains on. `--max_windows N` caps windows per session if a pass is slow.
+- **Settings.** EMA weights, fp32 everywhere (TF32 off, fp32 attention in place of the bf16 kernels, because loss differences of 1e-4 are measured). Windows are non-overlapping crops of `data.train_max_tokens` = 76 tokens (~10 s). That is the training window and the clip length of the replay buffers built by `scripts/build_replay_buffer.py`, whose `tmr` method calls `tmr_select.py`. `--max_windows N` caps windows per session if a pass is slow.
 - **Rough A100 cost.** E1 ≈ 5 min per boundary. E2 ≈ 10–20 min per boundary (with `--R_eval 32`). E3 ≈ 10–15 min per boundary (if GPU memory is short, `--accum_device cpu`). E4 ≈ 1 h for four sessions (`--no_attr` skips the attribution). E5 a few minutes.
 - **`eval_cl_session.py` change.** It now also stores the test sequence names, which E5 uses for BAS. Older JSONs work too: E5 reconstructs the names and checks the count.
 - **Full m_{i,t} matrix.** Fill it with the optional loop at the end of `run_all.sh`.

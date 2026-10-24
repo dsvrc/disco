@@ -338,9 +338,8 @@ def figures(res: dict, out: Path, k: int) -> None:
     fig, ax = plt.subplots(1, 4, figsize=(17, 3.4))
     lam = np.array(sp["eigenvalues"])
     ax[0].semilogy(np.arange(1, len(lam) + 1), lam / lam.sum(), "o-", ms=3, label="temporal $C_k$")
-    lc = np.array(res["lam_c"])
-    ax[0].semilogy(np.arange(1, len(lc) + 1), lc / lc.sum() if lc.sum() > 0 else lc, "-", lw=1, alpha=.6,
-                   label="channel $C^{chan}$")
+    lc = np.array(res["lam_c_share"])
+    ax[0].semilogy(np.arange(1, len(lc) + 1), lc, "-", lw=1, alpha=.6, label="channel $C^{chan}$")
     ax[0].axvline(sp["M_hat"], color="k", ls="--", lw=.8, label=f"BIC $\\hat M$={sp['M_hat']}")
     ax[0].set(xlabel="mode m", ylabel="$\\lambda_m$ / tr", title="spectrum")
     ax[0].legend(fontsize=7)
@@ -373,7 +372,7 @@ def figures(res: dict, out: Path, k: int) -> None:
     ax[0].legend(fontsize=6, ncol=2)
     psi = np.array(mi["circulant_eigs_sorted"])
     ax[1].semilogy(lam / lam.sum(), "o", ms=3, label="eigenvalues of $C_k$")
-    ax[1].semilogy(psi / psi.sum(), "-", label="circulant (power spectrum)")
+    ax[1].semilogy(np.where(psi > 0, psi / psi.sum(), np.nan), "-", label="circulant (power spectrum)")
     ax[1].set(xlabel="rank", title=f"Szego: TV={mi['szego_tv_distance']:.3f}, Toeplitz index={mi['toeplitz_index']:.3f}")
     ax[1].legend(fontsize=7)
     E.savefig(fig, out / f"e1_modes_k{k}")
@@ -390,8 +389,6 @@ def main() -> int:
     E.set_precision(not a.bf16_attention)
     cfg = E.load_cfg(a.config)
     runs = E.runs_of(a, cfg)
-    if not runs:
-        raise SystemExit(f"no run dirs {a.outputs}/*_{a.exp_prefix}_s<k> with last.ckpt")
     man = E.manifest(cfg, a.benchmark)
     K = len(man["sessions"])
     ks = a.boundaries or [k for k in range(1, K) if k - 1 in runs]
@@ -445,7 +442,8 @@ def main() -> int:
 
         res = {"boundary": k, "checkpoint": str(ck), "N": N, "T": T, "D": D, "pool_mode": a.pool_mode,
                "windows_per_session": {int(s): int((groups == s).sum()) for s in past},
-               "spectrum": sp, "lam_c": ops["lam_c"][: 4 * T], "channel_M_hat": S.bic_rank(ops["lam_c"], N * T)[0],
+               "spectrum": sp, "lam_c_share": ops["lam_c"][: 4 * T] / ops["lam_c"].sum(),
+               "channel_M_hat": S.bic_rank(ops["lam_c"], N * T)[0],
                "ky_fan": kf, "axis": axis_comparison(ops, T, D), "consistency": cons, "fw": fw,
                "modes": modes, "leading_modes": ops["U"][:, :12], "decode": decode, "buffers": bufs,
                "stability": stab}

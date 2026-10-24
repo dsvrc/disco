@@ -67,18 +67,17 @@ for v in $VARIANTS; do selection "$v" > /dev/null || exit 1; done
 for v in $VARIANTS; do
   read -r SEL _ <<< "$(selection "$v")"
   [ "$SEL" = "-" ] && continue
-  SRC=buffers/$B/$SEL/s0.json
-  if [ ! -f "$SRC" ]; then
-    SRC=$BUFR/$SEL/s0.json
-    if [ ! -f "$SRC" ]; then
-      echo "[screen] building the S0 buffer of $SEL"
-      CUDA_VISIBLE_DEVICES=${GPU_LIST[0]} python scripts/build_replay_buffer.py --method "$SEL" \
-        --config configs/cl/ldf_${B}_s0.yaml --ckpt "$S0_RUN/last.ckpt" --session 0 --out "$SRC" > "$LOG/buffer_$SEL.log" 2>&1
-      grep -E "^\[|^saved" "$LOG/buffer_$SEL.log" || true
-    fi
-  fi
+  DST=$BUFR/$TAG/$v/s0.json  # every variant has its own buffer folder: parallel screens never write the same file
+  [ -f "$DST" ] && continue
   mkdir -p "$BUFR/$TAG/$v"
-  cp "$SRC" "$BUFR/$TAG/$v/s0.json"
+  if [ -f "buffers/$B/$SEL/s0.json" ]; then
+    cp "buffers/$B/$SEL/s0.json" "$DST"  # the main run's buffer of the same S0 model
+  else
+    echo "[screen] building the S0 buffer of $v ($SEL)"
+    CUDA_VISIBLE_DEVICES=${GPU_LIST[0]} python scripts/build_replay_buffer.py --method "$SEL" \
+      --config configs/cl/ldf_${B}_s0.yaml --ckpt "$S0_RUN/last.ckpt" --session 0 --out "$DST" > "$LOG/buffer_$v.log" 2>&1
+    grep -E "^\[|^saved" "$LOG/buffer_$v.log" || true
+  fi
 done
 
 # 2. the S0 model on the same eval setting (the "before S1" reference; the main runs' scores when they match)
@@ -86,12 +85,15 @@ mkdir -p "$RES/s0_model"
 for i in 0 1; do
   ref=$RES/s0_model/after_s0_sess$i.json
   [ -f "$ref" ] && continue
+  tmp=$RES/s0_model/.tmp_$$_after_s0_sess$i.json  # written under a private name, then renamed (atomic)
   if [ "$MAIN_MATCH" = true ] && [ -f "results/$B/vanilla/after_s0_sess$i.json" ]; then
-    cp "results/$B/vanilla/after_s0_sess$i.json" "$ref"
+    cp "results/$B/vanilla/after_s0_sess$i.json" "$tmp"
   else
     CUDA_VISIBLE_DEVICES=${GPU_LIST[0]} python scripts/eval_cl_session.py --config configs/cl/ldf_${B}_s0.yaml \
-      --vae_ckpt "$VAE_CKPT" --ckpt "$S0_RUN/last.ckpt" --session $i $EVAL --out "$ref" > "$LOG/s0_model.eval$i.log" 2>&1
+      --vae_ckpt "$VAE_CKPT" --ckpt "$S0_RUN/last.ckpt" --session $i $EVAL --out "$tmp" > "$LOG/s0_model.eval$i.$$.log" 2>&1
   fi
+  mv -f "$tmp" "$ref"
+  rm -f "${tmp%.json}.joints.npz"
 done
 
 # 3. train + score every variant
@@ -130,4 +132,5 @@ done
 
 BASE=""
 [ "$MAIN_MATCH" = true ] && BASE="--baselines results/$B --baseline_buffers buffers/$B"
-python scripts/cl/screen_summary.py --results "$RES" --logs "$LOG" --buffers "$BUFR/$TAG" $BASE | tee "$RES/summary.md"
+python scripts/cl/screen_summary.py --results "$RES" --logs "$LOG" --buffers "$BUFR/$TAG" $BASE | tee "$RES/.summary_$$.md"
+mv -f "$RES/.summary_$$.md" "$RES/summary.md"  # the last screen to finish leaves the table with every variant

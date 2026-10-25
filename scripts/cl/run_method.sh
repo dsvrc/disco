@@ -8,9 +8,10 @@
 #
 #   bash scripts/cl/run_method.sh <method> [first_session=1] [last_session=4]
 #   methods: vanilla | random | random_star | random_distill | ocs | gcr | tmr | tmr_mix | tmr_joint | tmr_joint_ess |
-#            tmr_dance | tmr_dance_sel | tmgm | mir | csrel
+#            tmr_joint_neff | tmr_joint_op | tmr_dance | tmr_dance_sel | tmgm | mir | csrel
 #   (tmr_mix = the paper's TMR per genre with same-music dances pooled and drawn at random; tmr_joint / tmr_joint_ess =
-#   the paper's TMR on the joint music + dance trajectory; all with ground-truth replay)
+#   the paper's TMR on the joint music + dance trajectory; tmr_joint_neff = with the effective sample size in its BIC;
+#   tmr_joint_op = tmr_joint_neff matching the temporal operator as well as the mean; all with ground-truth replay)
 #   (tmr_dance = TMR-dance selection + distillation replay; tmr_dance_sel = TMR-dance selection + ground-truth
 #   replay like every baseline; random_distill = random selection + distillation)
 #
@@ -38,7 +39,7 @@ case $METHOD in
   random_distill) SELECT=random ; STAR=false ; DISTILL=true ;;
   tmr_dance) SELECT=tmr_dance ; STAR=false ; DISTILL=true ;;
   tmr_dance_sel) SELECT=tmr_dance ; STAR=false ; DISTILL=false ;;
-  tmr_mix|tmr_joint|tmr_joint_ess) SELECT=$METHOD ; STAR=false ; DISTILL=false ;;
+  tmr_mix|tmr_joint|tmr_joint_ess|tmr_joint_neff|tmr_joint_op) SELECT=$METHOD ; STAR=false ; DISTILL=false ;;
   ocs|gcr|tmr|tmgm|mir|csrel) SELECT=$METHOD ; STAR=false ; DISTILL=false ;;
   *) echo "unknown method $METHOD"; exit 1 ;;
 esac

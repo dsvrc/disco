@@ -169,7 +169,8 @@ def omp_simplex(Z: np.ndarray, budget: int, groups: np.ndarray | None = None, qu
     <z_i, u> > <Z_S w_S, u>; this is the fully-corrective Frank-Wolfe of Proposition fw. stop='positive' is the
     literal augment filter <z_i, u> > 0 of Algorithm 1, which is the test for unconstrained / non-negative pursuit:
     with uncentred atoms sharing a large common component every correlation turns negative after the first pick, so
-    it can return a one-atom buffer. Both choose the same atom whenever they continue."""
+    it can return a one-atom buffer. Both choose the same atom whenever they continue. stop='none' (fixed budget)
+    also chooses that atom, and keeps going to the budget when no atom lowers the error any more."""
     N = len(Z)
     y = Z.mean(0, dtype=np.float64) if y is None else np.asarray(y, np.float64)
     norms = np.linalg.norm(Z, axis=1) + 1e-30 if score == "normalized" else None
@@ -183,6 +184,8 @@ def omp_simplex(Z: np.ndarray, budget: int, groups: np.ndarray | None = None, qu
         corr = (Z @ u.astype(np.float32)).astype(np.float64)
         if stop == "fw":
             thr = float((y - u) @ u) if S else -np.inf
+        elif stop == "none":
+            thr = -np.inf
         else:
             thr = 0.0
         ok = corr > thr + 1e-9 * (abs(thr) if np.isfinite(thr) else 0.0) + 1e-12 * float(u @ u)

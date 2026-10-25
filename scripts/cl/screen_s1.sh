@@ -14,9 +14,15 @@
 #        STEPS (also the first argument), PROTOCOL (v1 | v2), MAX_TOKENS (a number | full), SAMPLES override the
 #        setup's values; the baselines are only reused when the result still matches the main runs.
 #   variants: vanilla | random | csrel | tmr | ocs | gcr | mir      (existing selections, ground-truth replay)
+#             tmr_mix         the paper's TMR per genre, same-music dances pooled, a random dance per picked window
+#             tmr_joint       the paper's TMR on the joint music + dance trajectory (only change), ground-truth replay
+#             tmr_joint_ess   tmr_joint with the BIC sample count corrected for correlated channels
 #             tmr_dance_sel   TMR-dance selection, ground-truth replay
 #             tmr_dance       TMR-dance selection + distillation replay
 #             random_distill  random selection + distillation replay
+#             tmr_dance_gt1   TMR-dance with the ground-truth replay term at full weight (gt_weight 1.0 instead of 0.25)
+#             tmr_dance_lam05 TMR-dance with half the replay weight (replay.weight 0.5: more room for the new session)
+#             tmr_dance_kd    TMR-dance with distillation only (gt_weight 0)
 set -euo pipefail
 B=aistpp_genre5
 read -r -a GPU_LIST <<< "${GPUS:-0}"
@@ -50,13 +56,17 @@ MAIN_MATCH=false  # same steps, schedule and scoring as the main runs: their S0 
 echo "[screen] S0 -> S1, $STEPS steps, protocol $PROTOCOL, eval $EVAL, GPUs ${GPU_LIST[*]}, matches the main runs: $MAIN_MATCH"
 echo "[screen] S0 model $S0_RUN | variants: $VARIANTS"
 
-selection() {  # variant -> "<selection method or -> <distill true|false>"
+selection() {  # variant -> "<selection method or -> <distill true|false> [extra train_ldf.py overrides]"
   case $1 in
     vanilla) echo "- false" ;;
     random|csrel|tmr|ocs|gcr|mir) echo "$1 false" ;;
+    tmr_mix|tmr_joint|tmr_joint_ess) echo "$1 false" ;;
     tmr_dance_sel) echo "tmr_dance false" ;;
     tmr_dance) echo "tmr_dance true" ;;
     random_distill) echo "random true" ;;
+    tmr_dance_gt1) echo "tmr_dance true --override replay.distill.gt_weight=1.0" ;;
+    tmr_dance_lam05) echo "tmr_dance true --override replay.weight=0.5" ;;
+    tmr_dance_kd) echo "tmr_dance true --override replay.distill.gt_weight=0.0" ;;
     *) echo "unknown variant $1" >&2; return 1 ;;
   esac
 }
@@ -98,9 +108,9 @@ done
 
 # 3. train + score every variant
 run_variant() {
-  local v=$1 gpu=$2 SEL DIST REPLAY="" ck
-  read -r SEL DIST <<< "$(selection "$v")"
-  [ "$SEL" != "-" ] && REPLAY="--override replay.buffer_dir=$BUFR/$TAG/$v --override replay.distill.enable=$DIST"
+  local v=$1 gpu=$2 SEL DIST VX REPLAY="" ck
+  read -r SEL DIST VX <<< "$(selection "$v")"
+  [ "$SEL" != "-" ] && REPLAY="--override replay.buffer_dir=$BUFR/$TAG/$v --override replay.distill.enable=$DIST ${VX:-}"
   echo "[screen] $v: training on GPU $gpu ($(date +%H:%M))"
   CUDA_VISIBLE_DEVICES=$gpu python train_ldf.py --config configs/cl/ldf_${B}_s1.yaml --override train=True \
     --override exp_name=cl_ldf_${B}_s1_${v} --override save_dir=./$OUT --override test_vae_ckpt="$VAE_CKPT" \

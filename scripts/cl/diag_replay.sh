@@ -25,8 +25,8 @@ S0_RUN=${S0_RUN:-$(ls -d outputs/*_cl_ldf_${B}_s0 | tail -1)}
 case $METHOD in
   random_star) STAR=true ; DISTILL=false ;;
   random_distill|tmr_dance) STAR=false ; DISTILL=true ;;
-  random|ocs|gcr|tmr|tmgm|mir|csrel) STAR=false ; DISTILL=false ;;
-  *) echo "diag_replay.sh needs a replay method (random, random_star, random_distill, ocs, gcr, tmr, tmr_dance, tmgm, mir, csrel)"; exit 1 ;;
+  random|ocs|gcr|tmr|tmr_mix|tmr_joint|tmr_joint_ess|tmr_dance_sel|tmgm|mir|csrel) STAR=false ; DISTILL=false ;;
+  *) echo "diag_replay.sh needs a replay method (random, random_star, random_distill, ocs, gcr, tmr, tmr_mix, tmr_joint, tmr_joint_ess, tmr_dance, tmr_dance_sel, tmgm, mir, csrel)"; exit 1 ;;
 esac
 BUF=buffers/$B/$METHOD
 LOG=logs/$B/$METHOD

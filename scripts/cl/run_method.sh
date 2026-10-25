@@ -7,8 +7,12 @@
 # with the same command.
 #
 #   bash scripts/cl/run_method.sh <method> [first_session=1] [last_session=4]
-#   methods: vanilla | random | random_star | random_distill | ocs | gcr | tmr | tmr_dance | tmgm | mir | csrel
-#   (tmr_dance = TMR-dance selection + distillation replay; random_distill = random selection + distillation)
+#   methods: vanilla | random | random_star | random_distill | ocs | gcr | tmr | tmr_mix | tmr_joint | tmr_joint_ess |
+#            tmr_dance | tmr_dance_sel | tmgm | mir | csrel
+#   (tmr_mix = the paper's TMR per genre with same-music dances pooled and drawn at random; tmr_joint / tmr_joint_ess =
+#   the paper's TMR on the joint music + dance trajectory; all with ground-truth replay)
+#   (tmr_dance = TMR-dance selection + distillation replay; tmr_dance_sel = TMR-dance selection + ground-truth
+#   replay like every baseline; random_distill = random selection + distillation)
 #
 # Environment overrides: VAE_CKPT, S0_RUN (output folder of the shared session-0 run), RATIO (0.10), SAMPLES (3),
 # MAX_TOKENS (empty = full-length evaluation), EXTRA (more train_ldf.py overrides, e.g. "--override trainer.max_steps=20000").
@@ -33,6 +37,8 @@ case $METHOD in
   random_star) SELECT=random ; STAR=true ; DISTILL=false ;;
   random_distill) SELECT=random ; STAR=false ; DISTILL=true ;;
   tmr_dance) SELECT=tmr_dance ; STAR=false ; DISTILL=true ;;
+  tmr_dance_sel) SELECT=tmr_dance ; STAR=false ; DISTILL=false ;;
+  tmr_mix|tmr_joint|tmr_joint_ess) SELECT=$METHOD ; STAR=false ; DISTILL=false ;;
   ocs|gcr|tmr|tmgm|mir|csrel) SELECT=$METHOD ; STAR=false ; DISTILL=false ;;
   *) echo "unknown method $METHOD"; exit 1 ;;
 esac

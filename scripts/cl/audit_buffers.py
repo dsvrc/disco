@@ -101,7 +101,8 @@ def main() -> int:
             clips = b["clips"]
             print(f"--- {m} s{j}: {f.resolve()}  (method in file: {b.get('method')}, session in file: {b.get('session')}, "
                   f"built from {b.get('ckpt')})")
-            if b.get("session") != j or b.get("method") not in (m, "random" if m == "random_star" else m):
+            # a runner method stores its selection method (tmr_dance_sel -> tmr_dance, random_distill -> random)
+            if b.get("session") != j or not str(m).startswith(str(b.get("method"))):
                 report("FAIL", "file", f"file says method {b.get('method')} session {b.get('session')}")
             cfg = load_config(f"configs/cl/ldf_{a.benchmark}_s{j}.yaml", overrides)
             clip_len = int(cfg.data.train_max_tokens)

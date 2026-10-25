@@ -15,6 +15,16 @@ training sequence); the buffer keeps --ratio (10 %) of them. Methods (adapted fr
   tmgm    the same idea as built by the earlier TMGM builder (build_replay_buffer_tmgm.py), on the same trajectories:
           its own BIC, whitening, random projection to proj_dim, regularised OMP towards the sum of the normalised
           atoms, random fill to the budget; its weights weight the replay loss
+  tmr_mix    TMR exactly as in the paper on music trajectories, run per genre, where dances that share a music window
+          (same song, same offset: identical music, so music-only TMR cannot tell them apart) are pooled into one
+          mixed sample; TMR picks music windows and each one is filled with a dance drawn at random from its mix
+          (unbiased), instead of the first by name
+  tmr_joint  TMR exactly as in the paper (temporal operator, BIC rank with N_eff = #clips x channels, whitened modal
+          atoms, simplex OMP, simplex weights), with one change: each clip's trajectory is the joint trajectory of its
+          music and its dance (the VAE latents, i.e. the diffusion target), each modality standardised. When many dances
+          share a song, music alone makes their clips identical; the dance is what tells them apart.
+  tmr_joint_ess  tmr_joint with the BIC's sample count corrected for correlated channels: N_eff = #clips x the
+          participation ratio of the channel covariance (the plain #clips x channels keeps nearly every mode)
   tmr_dance  TMR for dance models: the same core (temporal operator, BIC rank, whitened modal atoms, simplex OMP),
           with three changes for music-to-dance data, where many dances share one song (AIST++: ~19 per song) so music
           trajectories cannot tell them apart: (1) motion-aware trajectories, the music trajectory next to the
@@ -135,20 +145,26 @@ def balanced_blocks(blocks, mask):
 
 
 def select_tmr_dance(blocks, mask, groups, budget, rng, per_dance=1, rank="energy", energy=0.9, weights="uniform",
-                     stop="fw", **_):
+                     stop="fw", label="tmr_dance", **_):
     """TMR core (tmr_select: temporal operator, rank, whitened modal atoms, simplex-constrained OMP) on motion-aware
     trajectories, with at most `per_dance` clips per dance (0 = no limit) and k-center fill to the budget.
     rank: energy = fewest modes explaining `energy` of the temporal variance | bic_clips = BIC with N_eff = #clips |
-    bic_dims = BIC with N_eff = #clips x channels (tmr's choice, which keeps nearly every mode)."""
+    bic_dims = BIC with N_eff = #clips x channels (tmr's choice, which keeps nearly every mode) | bic_ess = BIC with
+    N_eff = #clips x the effective number of channels (participation ratio of the channel covariance: correlated
+    channels are not independent observations)."""
     sys.path.insert(0, os.path.join(os.getcwd(), "scripts", "evidence"))
     import tmr_select
 
     phi = balanced_blocks(blocks, mask)
     N, T, D = phi.shape
     lam_, U = tmr_select.eig_desc(temporal_operator_masked(phi, mask).numpy())
+    tokens = phi[mask.bool()].double()  # every valid (clip, time) row
+    Cc = torch.cov(tokens.T)  # channel covariance (D, D)
+    d_eff = float(torch.trace(Cc) ** 2 / (Cc ** 2).sum())
     M_clips, M_dims = tmr_select.bic_rank(lam_, N)[0], tmr_select.bic_rank(lam_, N * D)[0]
+    M_ess = tmr_select.bic_rank(lam_, N * d_eff)[0]
     M_energy = int(np.searchsorted(np.cumsum(lam_) / lam_.sum(), energy) + 1)
-    M = {"energy": M_energy, "bic_clips": M_clips, "bic_dims": M_dims}[rank]
+    M = {"energy": M_energy, "bic_clips": M_clips, "bic_dims": M_dims, "bic_ess": M_ess}[rank]
     Z, _ = tmr_select.modal_dictionary(phi.numpy(), "temporal", ops={"lam": lam_, "U": U}, M=M)
     groups = np.asarray(groups)
     quotas = {int(g): per_dance for g in np.unique(groups)} if per_dance > 0 else None
@@ -175,8 +191,9 @@ def select_tmr_dance(blocks, mask, groups, budget, rng, per_dance=1, rank="energ
     wts = [1.0] * len(idx) if weights == "uniform" else [max(modal_w[i], 1e-3) for i in idx]
     s = sum(wts)
     wts = [v / s * len(wts) for v in wts]
-    print(f"[tmr_dance] T={T} channels={D} (blocks {[b.shape[-1] for b in blocks]}): M={M} modes by {rank} "
-          f"({energy:.0%} energy: {M_energy}, BIC N_eff=N: {M_clips}, BIC N_eff=N*D: {M_dims}; "
+    print(f"[{label}] T={T} channels={D} (blocks {[b.shape[-1] for b in blocks]}): M={M} modes by {rank} "
+          f"({energy:.0%} energy: {M_energy}, BIC N_eff=N: {M_clips}, BIC N_eff=N*D: {M_dims}, BIC N_eff=N*D_eff "
+          f"(D_eff={d_eff:.1f}): {M_ess}; "
           f"{lam_[:M].sum() / lam_.sum():.1%} of temporal variance); OMP picked {n_omp}/{budget}"
           + (f", k-center fill {len(idx) - n_omp}" if len(idx) > n_omp else "")
           + f"; modal error {hist[0]:.3f} -> {hist[-1]:.3f}; {len(set(groups[idx].tolist()))} dances; weights {weights}")
@@ -184,6 +201,85 @@ def select_tmr_dance(blocks, mask, groups, budget, rng, per_dance=1, rank="energ
     for i in idx:
         score[i] = modal_w[i]  # stored as each clip's "score": its OMP (simplex) weight, 0 for k-center fill
     return idx, wts, score
+
+
+def condition_groups(temporal, mask, eps):
+    """Group clips whose music trajectories coincide within eps (relative to the mean trajectory norm): different
+    dances performed to the same song at the same offset, which music-only TMR cannot tell apart."""
+    flat = (temporal * mask[..., None]).reshape(len(temporal), -1).double()
+    d = torch.cdist(flat, flat) / flat.norm(dim=1).mean().clamp(min=1e-12)
+    parent = list(range(len(d)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    ii, jj = torch.nonzero(torch.triu(d < eps, 1), as_tuple=True)
+    for i, j in zip(ii.tolist(), jj.tolist()):
+        parent[find(i)] = find(j)
+    return [find(i) for i in range(len(d))]
+
+
+def select_tmr_mix(temporal, mask, clips, budget, rng, eps=0.02, per_genre=True, stop="fw", **_):
+    """TMR with dances that share music mixed: within each genre's pool, clips with (near-)identical music form one
+    mixed sample. TMR runs unchanged on these samples (temporal operator of all the genre's clips, the paper's BIC
+    rank, whitened modal atoms, simplex OMP towards the genre's mean atom with every clip counted, simplex weights)
+    and picks music windows; each picked window is filled with a dance drawn uniformly from its mix (preferring dances
+    not yet in the buffer) instead of the first one by name. The budget is split over genres by their share of clips."""
+    sys.path.insert(0, os.path.join(os.getcwd(), "scripts", "evidence"))
+    import tmr_select
+
+    N, T, D = temporal.shape
+    gid = condition_groups(temporal, mask, eps)
+    genre = [(c["name"][1:3] if per_genre else "all") for c in clips]
+    strata = sorted(set(genre))
+    size = {s: genre.count(s) for s in strata}
+    alloc = {s: int(budget * size[s] / N) for s in strata}  # largest-remainder split of the budget
+    for s in sorted(strata, key=lambda s: -(budget * size[s] / N - alloc[s]))[: budget - sum(alloc.values())]:
+        alloc[s] += 1
+    picks, wts, used = [], [], set()
+    score = torch.full((N,), float("nan"))
+    for s in strata:
+        members = [i for i in range(N) if genre[i] == s]
+        groups = {}
+        for i in members:
+            groups.setdefault(gid[i], []).append(i)
+        mixes = list(groups.values())
+        lam_, U = tmr_select.eig_desc(temporal_operator_masked(temporal[members], mask[members]).numpy())
+        M = tmr_select.bic_rank(lam_, len(members) * D)[0]  # the paper's rank on this genre's clips
+        m = mask.float()
+        reps = torch.stack([(temporal[g] * m[g][..., None]).sum(0) / m[g].sum(0).clamp(min=1)[:, None] for g in mixes])
+        Z, _ = tmr_select.modal_dictionary(reps.numpy(), "temporal", ops={"lam": lam_, "U": U}, M=M)
+        n_g = np.array([len(g) for g in mixes], dtype=np.float64)
+        y = (n_g[:, None] * Z.astype(np.float64)).sum(0) / n_g.sum()  # the genre's mean atom, every clip counted
+        sel, w, hist = tmr_select.omp_simplex(Z, alloc[s], y=y, stop=stop, trace=True)
+        sel, w = [int(k) for k in sel], (np.asarray(w) * max(len(sel), 1)).tolist()
+        n_omp = len(sel)
+        if len(sel) < alloc[s]:  # OMP stopped early: further mixes at random
+            rest = [k for k in range(len(mixes)) if k not in sel]
+            extra = rng.choice(rest, size=min(alloc[s] - len(sel), len(rest)), replace=False).tolist()
+            sel += extra
+            w += [1.0] * len(extra)
+        for k, wk in zip(sel, w):
+            fresh = [i for i in mixes[k] if clips[i]["name"] not in used]
+            i = int(rng.choice(fresh if fresh else mixes[k]))
+            used.add(clips[i]["name"])
+            picks.append(i)
+            wts.append(max(wk, 1e-3))
+            score[i] = len(mixes[k])  # stored as the clip's "score": how many dances share its music window
+        dup = sum(len(g) for g in mixes if len(g) > 1)
+        print(f"[tmr_mix] genre {s}: {len(members)} clips -> {len(mixes)} mixed samples ({dup} clips share music with "
+              f"another dance; largest mix {max(len(g) for g in mixes)}); M={M} modes; OMP picked {n_omp}/{alloc[s]}"
+              + (f", random fill {alloc[s] - n_omp}" if alloc[s] > n_omp else "")
+              + (f"; modal error {hist[0]:.3f} -> {hist[-1]:.3f}" if hist else ""))
+    tot = sum(wts)
+    wts = [v / tot * len(wts) for v in wts]
+    names = [clips[i]["name"] for i in picks]
+    dancers = {n.split("_")[3] for n in names if len(n.split("_")) > 4}
+    print(f"[tmr_mix] buffer: {len(picks)} clips, {len(set(names))} dances, {len(dancers)} dancers, per genre {alloc}")
+    return picks, wts, score
 
 
 def bic_tmgm(lam_, N, T):
@@ -302,7 +398,8 @@ def select_csrel(model, init_model, cands, budget, rng, device, rounds=5, steps=
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--method", required=True,
-                    choices=["random", "ocs", "gcr", "tmr", "tmr_dance", "tmgm", "mir", "csrel"])
+                    choices=["random", "ocs", "gcr", "tmr", "tmr_mix", "tmr_joint", "tmr_joint_ess", "tmr_dance", "tmgm",
+                             "mir", "csrel"])
     ap.add_argument("--config", required=True, help="config of the session whose buffer is built (its train list)")
     ap.add_argument("--ckpt", help="model after this session (not needed for random)")
     ap.add_argument("--prev_ckpt", default=None, help="csrel: model before this session (default: fresh init)")
@@ -317,10 +414,13 @@ def main() -> int:
     ap.add_argument("--dance_traj", choices=["response", "latent", "music"], default="response",
                     help="tmr_dance trajectories: music + denoiser hidden states | music + VAE latents | music only")
     ap.add_argument("--dance_per_dance", type=int, default=1, help="tmr_dance: max clips per dance (0 = no limit)")
-    ap.add_argument("--dance_rank", choices=["energy", "bic_clips", "bic_dims"], default="energy",
+    ap.add_argument("--dance_rank", choices=["energy", "bic_clips", "bic_dims", "bic_ess"], default="energy",
                     help="tmr_dance modes: explaining --dance_energy of the temporal variance | BIC with N_eff = #clips"
                          " | BIC with N_eff = #clips x channels (tmr's choice)")
     ap.add_argument("--dance_energy", type=float, default=0.9)
+    ap.add_argument("--mix_eps", type=float, default=0.02,
+                    help="tmr_mix: music trajectories closer than this (relative) count as the same music window")
+    ap.add_argument("--mix_per_genre", type=int, default=1, help="tmr_mix: 1 = one pool per genre, 0 = one pool")
     ap.add_argument("--dance_weights", choices=["uniform", "modal"], default="uniform",
                     help="tmr_dance replay weights: uniform | the OMP simplex weights")
     ap.add_argument("--ocs_batch", type=int, default=128)
@@ -362,22 +462,31 @@ def main() -> int:
     elif method == "tmr":
         temporal, mask, _ = clip_music_features(model, loader, device)
         idx, wts, score = select_tmr(temporal, mask, stop=a.tmr_stop, **kw)
+    elif method == "tmr_mix":
+        temporal, mask, _ = clip_music_features(model, loader, device)
+        idx, wts, score = select_tmr_mix(temporal, mask, cands.clips, eps=a.mix_eps, per_genre=bool(a.mix_per_genre),
+                                         stop=a.tmr_stop, **kw)
     elif method == "tmgm":
         temporal, mask, _ = clip_music_features(model, loader, device)
         idx, wts, score = select_tmgm(temporal, mask, lam=a.omp_lam, proj_dim=a.proj_dim, **kw)
-    elif method == "tmr_dance":
+    elif method in ("tmr_dance", "tmr_joint", "tmr_joint_ess"):
+        if method == "tmr_dance":
+            traj, per_dance, rank, weights = a.dance_traj, a.dance_per_dance, a.dance_rank, a.dance_weights
+        else:  # TMR exactly as in the paper, on the joint trajectory: music + the dance's own latent trajectory
+            traj, per_dance, weights = "latent", 0, "modal"
+            rank = "bic_dims" if method == "tmr_joint" else "bic_ess"
         music, mask, tokens = clip_music_features(model, loader, device)
         blocks = [music]
-        if a.dance_traj == "response":
+        if traj == "response":
             blocks.append(clip_response_features(model, loader, device, seed=a.seed))
-        elif a.dance_traj == "latent":
+        elif traj == "latent":
             blocks.append(tokens)
         T = max(b.shape[1] for b in blocks)
         blocks, mask = [_pad_to(b, T) for b in blocks], _pad_to(mask.float(), T).bool()
         dance_id = {n: i for i, n in enumerate(sorted({c["name"] for c in cands.clips}))}
         idx, wts, score = select_tmr_dance(blocks, mask, [dance_id[c["name"]] for c in cands.clips],
-                                           per_dance=a.dance_per_dance, rank=a.dance_rank, energy=a.dance_energy,
-                                           weights=a.dance_weights, stop=a.tmr_stop, **kw)
+                                           per_dance=per_dance, rank=rank, energy=a.dance_energy,
+                                           weights=weights, stop=a.tmr_stop, label=method, **kw)
     elif method == "mir":
         from datasets.aistpp import AistPPDataset
         train_set = AistPPDataset(cfg.config, split="train")  # random training windows, as in training
@@ -400,7 +509,7 @@ def main() -> int:
     save_buffer(a.out, clips, method=method, session=a.session, ratio=a.ratio, list_path=list_path,
                 n_candidates=N, budget=budget, candidate_tokens=cand_tokens, buffer_tokens=buf_tokens,
                 n_sequences=len({c["name"] for c in clips}), ckpt=a.ckpt, prev_ckpt=a.prev_ckpt, seed=a.seed,
-                params={k: v for k, v in vars(a).items() if k.split("_")[0] in ("omp", "proj", "ocs", "tmr", "dance", "mir", "csrel")},
+                params={k: v for k, v in vars(a).items() if k.split("_")[0] in ("omp", "proj", "ocs", "tmr", "dance", "mix", "mir", "csrel")},
                 seconds=round(time.time() - t0, 1))
     w = np.array(wts)
     print(f"saved {a.out}: {len(clips)} clips from {len({c['name'] for c in clips})} sequences, "

@@ -42,9 +42,11 @@ def composition(buf):
 
 
 def row(old, new, probe, buf):
-    return dict(old=old["StyleRetention"], new=new["StyleRetention"], mean=(old["StyleRetention"] + new["StyleRetention"]) / 2,
+    o, n = old["StyleRetention"], new["StyleRetention"]
+    return dict(old=o, new=n, mean=(o + n) / 2, hmean=2 * o * n / (o + n) if o + n > 0 else 0.0,
                 old_dance=old.get("DanceRate", float("nan")), new_dance=new.get("DanceRate", float("nan")),
-                old_fd=old["StyleFD"], new_fd=new["StyleFD"], probe=probe, comp=composition(buf))
+                old_fd=old["StyleFD"], new_fd=new["StyleFD"], old_fidk=old.get("FID_k", float("nan")),
+                new_fidk=new.get("FID_k", float("nan")), probe=probe, comp=composition(buf))
 
 
 def main() -> int:
@@ -79,15 +81,20 @@ def main() -> int:
         print(f"S0 model before S1 (same eval): S0 retention {ref0['StyleRetention']:.3f} (ceiling "
               f"{ref0['gt_reference']['StyleRetention_gt']:.3f}), S1 retention {ref1['StyleRetention']:.3f}; "
               f"complete-forgetting level of S0 {ref0['gt_reference']['StyleRetention_complete_forgetting']:.3f}\n")
-    print("| variant | S0 retention (old) | S1 retention (new) | mean | DanceRate old / new | StyleFD old / new | "
-          "probe S0 non-buffered (start -> end) | S0 buffer |")
-    print("|---|---|---|---|---|---|---|---|")
-    for name, r in sorted(rows, key=lambda x: -x[1]["mean"]):
+    before = ref0["StyleRetention"] if ref0 else None
+    print("Ranked by the harmonic mean of old and new retention (high only when both are; the plain mean rewards a\n"
+          "method that learns S1 and forgets S0 completely). 'S0 kept' = S0 retention after S1 / before S1.\n")
+    print("| variant | S0 retention (old) | S1 retention (new) | harmonic mean | mean | S0 kept | DanceRate old / new | "
+          "StyleFD old / new | FID_k old / new | probe S0 non-buffered (start -> end) | S0 buffer |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|")
+    for name, r in sorted(rows, key=lambda x: -x[1]["hmean"]):
         probe = f"{r['probe'][0]:.3f} -> {r['probe'][1]:.3f}" if r["probe"] else "-"
-        print(f"| {name} | {r['old']:.3f} | {r['new']:.3f} | **{r['mean']:.3f}** | {r['old_dance']:.2f} / "
-              f"{r['new_dance']:.2f} | {r['old_fd']:.3f} / {r['new_fd']:.3f} | {probe} | {r['comp']} |")
+        kept = f"{r['old'] / before:.0%}" if before else "-"
+        print(f"| {name} | {r['old']:.3f} | {r['new']:.3f} | **{r['hmean']:.3f}** | {r['mean']:.3f} | {kept} | "
+              f"{r['old_dance']:.2f} / {r['new_dance']:.2f} | {r['old_fd']:.3f} / {r['new_fd']:.3f} | "
+              f"{r['old_fidk']:.0f} / {r['new_fidk']:.0f} | {probe} | {r['comp']} |")
     for name in unfinished:
-        print(f"| {name} | not finished | | | | | | |")
+        print(f"| {name} | not finished | | | | | | | | | |")
     return 0
 
 

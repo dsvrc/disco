@@ -34,6 +34,10 @@ training sequence); the buffer keeps --ratio (10 %) of them. Methods (adapted fr
           KL divergence between the buffer's and the session's Gaussian in the modal coordinates (to second order).
           Under TMR's model the session is that Gaussian, and a loss quadratic in the trajectory is reproduced exactly
           by the buffer iff both moments match; the paper's objective is the mean term alone.
+  tmr_resp_neff  tmr_joint_neff on the model's own joint trajectory: the music trajectory next to the denoiser's
+          last-block hidden states on the clip (clean history, as in tmr_dance) instead of the VAE latents. As the
+          paper's (A1) takes the encoder's output rather than the raw audio, this takes the representation the
+          per-sample gradient flows through rather than the raw target. Everything else as tmr_joint_neff.
   tmr_dance  TMR for dance models: the same core (temporal operator, BIC rank, whitened modal atoms, simplex OMP),
           with three changes for music-to-dance data, where many dances share one song (AIST++: ~19 per song) so music
           trajectories cannot tell them apart: (1) motion-aware trajectories, the music trajectory next to the
@@ -472,7 +476,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--method", required=True,
                     choices=["random", "ocs", "gcr", "tmr", "tmr_mix", "tmr_joint", "tmr_joint_ess", "tmr_joint_neff",
-                             "tmr_joint_op", "tmr_dance", "tmgm", "mir", "csrel"])
+                             "tmr_joint_op", "tmr_resp_neff", "tmr_dance", "tmgm", "mir", "csrel"])
     ap.add_argument("--config", required=True, help="config of the session whose buffer is built (its train list)")
     ap.add_argument("--ckpt", help="model after this session (not needed for random)")
     ap.add_argument("--prev_ckpt", default=None, help="csrel: model before this session (default: fresh init)")
@@ -543,14 +547,14 @@ def main() -> int:
     elif method == "tmgm":
         temporal, mask, _ = clip_music_features(model, loader, device)
         idx, wts, score = select_tmgm(temporal, mask, lam=a.omp_lam, proj_dim=a.proj_dim, **kw)
-    elif method in ("tmr_dance", "tmr_joint", "tmr_joint_ess", "tmr_joint_neff", "tmr_joint_op"):
+    elif method in ("tmr_dance", "tmr_joint", "tmr_joint_ess", "tmr_joint_neff", "tmr_joint_op", "tmr_resp_neff"):
         moments, fill = 1, "kcenter"
         if method == "tmr_dance":
             traj, per_dance, rank, weights = a.dance_traj, a.dance_per_dance, a.dance_rank, a.dance_weights
-        else:  # TMR exactly as in the paper, on the joint trajectory: music + the dance's own latent trajectory
-            traj, per_dance, weights = "latent", 0, "modal"
+        else:  # TMR as in the paper on a joint trajectory: music + the dance's latents (tmr_resp_neff: + the model's response)
+            traj, per_dance, weights = ("response" if method == "tmr_resp_neff" else "latent"), 0, "modal"
             rank = {"tmr_joint": "bic_dims", "tmr_joint_ess": "bic_ess"}.get(method, "bic_neff")
-            if method in ("tmr_joint_neff", "tmr_joint_op"):
+            if method in ("tmr_joint_neff", "tmr_joint_op", "tmr_resp_neff"):
                 moments, fill = (2 if method == "tmr_joint_op" else 1), "pursuit"
         music, mask, tokens = clip_music_features(model, loader, device)
         cond = condition_groups(music, mask, a.mix_eps)

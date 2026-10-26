@@ -14,9 +14,13 @@ Checks per buffer (buffers/<benchmark>/<method>/s{j}.json):
   weights     no zero / negative weights (a zero-weight clip takes a replay slot but adds nothing), effective sample
               size (sum w)^2 / sum w^2
   coverage    sequences / music pieces / dancers of the session that appear in the buffer
+  motion      motion energy of the buffered clips (mean squared frame-to-frame change of their VAE tokens) against the
+              session's clips, and the share of replay weight on its least / most moving quarter (25 % / 25 % for a
+              representative buffer): over-weighted still clips teach freezing, over-weighted fast ones raise FID_k
 
   python scripts/cl/audit_buffers.py                      # every method under buffers/aistpp_genre5
   python scripts/cl/audit_buffers.py --methods tmr gcr    # some methods
+  python scripts/cl/audit_buffers.py --sessions 0         # every method's session-0 buffer
 """
 
 from __future__ import annotations
@@ -60,11 +64,24 @@ def candidates(cfg, list_path: Path, clip_len: int) -> tuple[dict, list]:
     return lengths, [(n, s, l) for n in sorted(lengths) for s, l in tile_clips(lengths[n], clip_len)]
 
 
+def motion_energy(tok_dir: Path, cands: list) -> dict:
+    """Mean squared frame-to-frame change of the VAE tokens of every candidate clip, keyed by (name, start): the
+    motion energy of the diffusion target, ~0 for a held pose."""
+    seqs, out = {}, {}
+    for n, s, l in cands:
+        if n not in seqs:
+            seqs[n] = np.load(tok_dir / f"{n}.npy").astype(np.float64)
+        x = seqs[n][s:s + l]
+        out[(n, s)] = float((np.diff(x.reshape(len(x), -1), axis=0) ** 2).sum(1).mean()) if len(x) > 1 else 0.0
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--benchmark", default="aistpp_genre5")
     ap.add_argument("--buffers", default=None, help="default buffers/<benchmark>")
     ap.add_argument("--methods", nargs="*", default=None)
+    ap.add_argument("--sessions", type=int, nargs="*", default=None, help="only these sessions' buffers (default all)")
     ap.add_argument("--ratio", type=float, default=0.10)
     ap.add_argument("--override", action="append", default=[], help="config overrides key=value (repeatable)")
     a = ap.parse_args()
@@ -79,7 +96,7 @@ def main() -> int:
     bench = Path(str(raw)) / "cl_sessions" / a.benchmark
     manifest = json.loads((bench / "manifest.json").read_text())
     n_fail = n_warn = 0
-    cache = {}
+    cache, energy = {}, {}
     rows = []
 
     def report(level, what, msg):
@@ -90,6 +107,7 @@ def main() -> int:
 
     for m in methods:
         files = sorted((root / m).glob("s*.json"), key=lambda p: int(p.stem[1:]))
+        files = [f for f in files if a.sessions is None or int(f.stem[1:]) in a.sessions]
         print(f"\n=== {m}: {len(files)} buffer file(s) in {(root / m).resolve()}")
         if not files:
             n_fail += 1
@@ -165,6 +183,18 @@ def main() -> int:
             pool_music, pool_dancers = {part(n, 4) for n in lengths}, {part(n, 3) for n in lengths}
             report("INFO", "coverage", f"{len(seqs)}/{len(lengths)} sequences, {len(music)}/{len(pool_music)} music pieces, "
                                        f"{len(dancers)}/{len(pool_dancers)} dancers")
+            # motion
+            if j not in energy:
+                energy[j] = motion_energy(list_path.parent / cfg.data.token_path, cands)
+            pool = np.array(list(energy[j].values()))
+            q1, q3 = np.quantile(pool, [0.25, 0.75])
+            e = np.array([energy[j].get((c["name"], c["start"]), np.nan) for c in clips])
+            wn = np.where(np.isnan(e), 0.0, w) / max(float(w[~np.isnan(e)].sum()), 1e-12)
+            report("INFO", "motion", f"token motion energy: session clips {pool.mean():.4f} (median {np.median(pool):.4f}); "
+                                     f"buffer {np.nanmean(e):.4f}, replay-weighted {np.nansum(wn * e):.4f}; replay weight "
+                                     f"on the session's least / most moving quarter {wn[e <= q1].sum():.0%} / "
+                                     f"{wn[e >= q3].sum():.0%} (25% / 25% when representative)"
+                                     + (f"; {int(np.isnan(e).sum())} clips not on the candidate grid" if np.isnan(e).any() else ""))
             rows.append((m, j, len(clips), budget, share, zero, ess))
 
     print("\n=== summary (method, session, clips, recomputed budget, token share, zero weights, effective size)")

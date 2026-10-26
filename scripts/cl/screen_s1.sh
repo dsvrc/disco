@@ -20,6 +20,9 @@
 #             tmr_joint_neff  tmr_joint with the BIC sample count = the effective number of independent observations
 #                             (correlated channels, and clips of one song sharing their music)
 #             tmr_joint_op    tmr_joint_neff that also matches the temporal operator (second moment), not only the mean
+#             tmr_resp_neff   tmr_joint_neff on the music + denoiser hidden-state trajectory instead of the VAE latents
+#             <variant>_seed<k>  that variant trained with seed k on the same buffer (its base variant's screen buffer
+#                             when there is one), for the run-to-run spread: e.g. tmr_dance_sel_seed2
 #             tmr_dance_sel   TMR-dance selection, ground-truth replay
 #             tmr_dance       TMR-dance selection + distillation replay
 #             random_distill  random selection + distillation replay
@@ -61,9 +64,10 @@ echo "[screen] S0 model $S0_RUN | variants: $VARIANTS"
 
 selection() {  # variant -> "<selection method or -> <distill true|false> [extra train_ldf.py overrides]"
   case $1 in
+    *_seed[0-9]*) local s ; s=$(selection "${1%_seed*}") || return 1 ; echo "$s --override seed=${1##*_seed}" ;;
     vanilla) echo "- false" ;;
     random|csrel|tmr|ocs|gcr|mir) echo "$1 false" ;;
-    tmr_mix|tmr_joint|tmr_joint_ess|tmr_joint_neff|tmr_joint_op) echo "$1 false" ;;
+    tmr_mix|tmr_joint|tmr_joint_ess|tmr_joint_neff|tmr_joint_op|tmr_resp_neff) echo "$1 false" ;;
     tmr_dance_sel) echo "tmr_dance false" ;;
     tmr_dance) echo "tmr_dance true" ;;
     random_distill) echo "random true" ;;
@@ -83,7 +87,10 @@ for v in $VARIANTS; do
   DST=$BUFR/$TAG/$v/s0.json  # every variant has its own buffer folder: parallel screens never write the same file
   [ -f "$DST" ] && continue
   mkdir -p "$BUFR/$TAG/$v"
-  if [ -f "buffers/$B/$SEL/s0.json" ]; then
+  base=${v%_seed*}
+  if [ "$base" != "$v" ] && [ -f "$BUFR/$TAG/$base/s0.json" ]; then
+    cp "$BUFR/$TAG/$base/s0.json" "$DST"  # a seed variant replays its base variant's buffer: only the seed differs
+  elif [ -f "buffers/$B/$SEL/s0.json" ]; then
     cp "buffers/$B/$SEL/s0.json" "$DST"  # the main run's buffer of the same S0 model
   else
     echo "[screen] building the S0 buffer of $v ($SEL)"
@@ -111,9 +118,10 @@ done
 
 # 3. train + score every variant
 run_variant() {
-  local v=$1 gpu=$2 SEL DIST VX REPLAY="" ck
+  local v=$1 gpu=$2 SEL DIST VX REPLAY ck
   read -r SEL DIST VX <<< "$(selection "$v")"
-  [ "$SEL" != "-" ] && REPLAY="--override replay.buffer_dir=$BUFR/$TAG/$v --override replay.distill.enable=$DIST ${VX:-}"
+  REPLAY=${VX:-}
+  [ "$SEL" != "-" ] && REPLAY="--override replay.buffer_dir=$BUFR/$TAG/$v --override replay.distill.enable=$DIST $REPLAY"
   echo "[screen] $v: training on GPU $gpu ($(date +%H:%M))"
   CUDA_VISIBLE_DEVICES=$gpu python train_ldf.py --config configs/cl/ldf_${B}_s1.yaml --override train=True \
     --override exp_name=cl_ldf_${B}_s1_${v} --override save_dir=./$OUT --override test_vae_ckpt="$VAE_CKPT" \

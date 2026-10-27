@@ -51,7 +51,9 @@ SAMPLES=${SAMPLES:-3}
 unset PYTHONPATH
 export PYTHONNOUSERSITE=1
 VAE_CKPT=${VAE_CKPT:-$(ls -d outputs/*_cl_vae_${B}_alltrain | tail -1)/last.ckpt}
+[ -n "${S0_TAG:-}" ] && [ -z "${S0_RUN:-}" ] && { echo "[screen] S0_TAG=$S0_TAG needs S0_RUN (the S0 model it names)"; exit 1; }
 S0_RUN=${S0_RUN:-$(ls -d outputs/*_cl_ldf_${B}_s0 | tail -1)}
+[ -f "$S0_RUN/last.ckpt" ] || { echo "[screen] no finished S0 model: $S0_RUN/last.ckpt is missing"; exit 1; }
 TAG=${PROTOCOL}_${STEPS}_${MAX_TOKENS}${S0_TAG:+_$S0_TAG}
 OUT=outputs/screen/$TAG
 RES=results/$B/screen/$TAG

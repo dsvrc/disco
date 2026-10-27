@@ -13,6 +13,8 @@
 #                   nothing from the main runs is comparable, so put the baselines in VARIANTS too.
 #        STEPS (also the first argument), PROTOCOL (v1 | v2), MAX_TOKENS (a number | full), SAMPLES override the
 #        setup's values; the baselines are only reused when the result still matches the main runs.
+#        S0_RUN + S0_TAG: start from another S0 model (e.g. one retrained with protocol v2); S0_TAG names it in every
+#        output folder (<protocol>_<steps>_<tokens>_<S0_TAG>), and buffers are then always built from that model.
 #   variants: vanilla | random | csrel | tmr | ocs | gcr | mir | tmgm   (existing selections, ground-truth replay)
 #             random_star     random selection + STAR
 #             tmr_mix         the paper's TMR per genre, same-music dances pooled, a random dance per picked window
@@ -22,7 +24,8 @@
 #                             (correlated channels, and clips of one song sharing their music)
 #             tmr_joint_op    tmr_joint_neff that also matches the temporal operator (second moment), not only the mean
 #             tmr_resp_neff   tmr_joint_neff on the music + denoiser hidden-state trajectory instead of the VAE latents
-#             tmr_joint_neff_kd  tmr_joint_neff's buffer replayed by distillation (replay.distill) instead of ground truth
+#             <variant>_kd    that variant's buffer replayed by distillation (replay.distill) instead of ground truth,
+#                             e.g. tmr_joint_neff_kd, random_kd, tmgm_kd (tmr_dance_kd keeps its own meaning, below)
 #             <variant>_seed<k>  that variant trained with seed k on the same buffer (its base variant's screen buffer
 #                             when there is one), for the run-to-run spread: e.g. tmr_dance_sel_seed2
 #             tmr_dance_sel   TMR-dance selection, ground-truth replay
@@ -49,7 +52,7 @@ unset PYTHONPATH
 export PYTHONNOUSERSITE=1
 VAE_CKPT=${VAE_CKPT:-$(ls -d outputs/*_cl_vae_${B}_alltrain | tail -1)/last.ckpt}
 S0_RUN=${S0_RUN:-$(ls -d outputs/*_cl_ldf_${B}_s0 | tail -1)}
-TAG=${PROTOCOL}_${STEPS}_${MAX_TOKENS}
+TAG=${PROTOCOL}_${STEPS}_${MAX_TOKENS}${S0_TAG:+_$S0_TAG}
 OUT=outputs/screen/$TAG
 RES=results/$B/screen/$TAG
 BUFR=buffers/$B/screen
@@ -60,7 +63,8 @@ PROT=""
 EVAL="--samples $SAMPLES"
 [ "$MAX_TOKENS" != full ] && EVAL="$EVAL --max_tokens $MAX_TOKENS"
 MAIN_MATCH=false  # same steps, schedule and scoring as the main runs: their S0 / S1 scores are comparable
-[ "$PROTOCOL" = v1 ] && [ "$STEPS" = 40000 ] && [ "$MAX_TOKENS" = full ] && [ "$SAMPLES" = 3 ] && MAIN_MATCH=true
+[ "$PROTOCOL" = v1 ] && [ "$STEPS" = 40000 ] && [ "$MAX_TOKENS" = full ] && [ "$SAMPLES" = 3 ] && [ -z "${S0_TAG:-}" ] \
+  && MAIN_MATCH=true
 echo "[screen] S0 -> S1, $STEPS steps, protocol $PROTOCOL, eval $EVAL, GPUs ${GPU_LIST[*]}, matches the main runs: $MAIN_MATCH"
 echo "[screen] S0 model $S0_RUN | variants: $VARIANTS"
 
@@ -71,13 +75,15 @@ selection() {  # variant -> "<selection method or -> <distill true|false> [extra
     random|csrel|tmr|ocs|gcr|mir|tmgm) echo "$1 false" ;;
     random_star) echo "random false --override replay.star.enable=true" ;;
     tmr_mix|tmr_joint|tmr_joint_ess|tmr_joint_neff|tmr_joint_op|tmr_resp_neff) echo "$1 false" ;;
-    tmr_joint_neff_kd) echo "tmr_joint_neff true" ;;
     tmr_dance_sel) echo "tmr_dance false" ;;
     tmr_dance) echo "tmr_dance true" ;;
     random_distill) echo "random true" ;;
     tmr_dance_gt1) echo "tmr_dance true --override replay.distill.gt_weight=1.0" ;;
     tmr_dance_lam05) echo "tmr_dance true --override replay.weight=0.5" ;;
     tmr_dance_kd) echo "tmr_dance true --override replay.distill.gt_weight=0.0" ;;
+    *_kd) local s sel rest ; s=$(selection "${1%_kd}") || return 1 ; read -r sel _ rest <<< "$s"
+          [ "$sel" = "-" ] && { echo "$1: no buffer to distil" >&2 ; return 1 ; }
+          echo "$sel true $rest" ;;
     *) echo "unknown variant $1" >&2; return 1 ;;
   esac
 }
@@ -94,7 +100,7 @@ for v in $VARIANTS; do
   base=${v%_seed*}
   if [ "$base" != "$v" ] && [ -f "$BUFR/$TAG/$base/s0.json" ]; then
     cp "$BUFR/$TAG/$base/s0.json" "$DST"  # a seed variant replays its base variant's buffer: only the seed differs
-  elif [ -f "buffers/$B/$SEL/s0.json" ]; then
+  elif [ -z "${S0_TAG:-}" ] && [ -f "buffers/$B/$SEL/s0.json" ]; then
     cp "buffers/$B/$SEL/s0.json" "$DST"  # the main run's buffer of the same S0 model
   else
     echo "[screen] building the S0 buffer of $v ($SEL)"

@@ -13,7 +13,8 @@
 #                   nothing from the main runs is comparable, so put the baselines in VARIANTS too.
 #        STEPS (also the first argument), PROTOCOL (v1 | v2), MAX_TOKENS (a number | full), SAMPLES override the
 #        setup's values; the baselines are only reused when the result still matches the main runs.
-#   variants: vanilla | random | csrel | tmr | ocs | gcr | mir      (existing selections, ground-truth replay)
+#   variants: vanilla | random | csrel | tmr | ocs | gcr | mir | tmgm   (existing selections, ground-truth replay)
+#             random_star     random selection + STAR
 #             tmr_mix         the paper's TMR per genre, same-music dances pooled, a random dance per picked window
 #             tmr_joint       the paper's TMR on the joint music + dance trajectory (only change), ground-truth replay
 #             tmr_joint_ess   tmr_joint with the BIC sample count corrected for correlated channels
@@ -66,7 +67,8 @@ selection() {  # variant -> "<selection method or -> <distill true|false> [extra
   case $1 in
     *_seed[0-9]*) local s ; s=$(selection "${1%_seed*}") || return 1 ; echo "$s --override seed=${1##*_seed}" ;;
     vanilla) echo "- false" ;;
-    random|csrel|tmr|ocs|gcr|mir) echo "$1 false" ;;
+    random|csrel|tmr|ocs|gcr|mir|tmgm) echo "$1 false" ;;
+    random_star) echo "random false --override replay.star.enable=true" ;;
     tmr_mix|tmr_joint|tmr_joint_ess|tmr_joint_neff|tmr_joint_op|tmr_resp_neff) echo "$1 false" ;;
     tmr_dance_sel) echo "tmr_dance false" ;;
     tmr_dance) echo "tmr_dance true" ;;

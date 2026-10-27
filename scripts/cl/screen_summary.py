@@ -4,7 +4,8 @@ Summary table of an S0 -> S1 screen (scripts/cl/screen_s1.sh): per variant the S
 training S1, their mean (old and new count equally), the S0 model's scores on the same eval setting as reference, the
 last fixed-noise probe of the replay diagnostics (non-buffered S0 clips: does replay generalise beyond the buffer?),
 and the buffer's composition. With --baselines, the main runs' S1 scores of every method are added as rows (only valid
-when the screen used the main runs' setup; screen_s1.sh passes it only then).
+when the screen used the main runs' setup; screen_s1.sh passes it only then). When a variant was also trained with
+other seeds (<variant>_seed<k>: same buffer), a second table gives each method's mean and spread over its seeds.
 
   python scripts/cl/screen_summary.py --results results/aistpp_genre5/screen/v1_40000_full \
       --logs logs/aistpp_genre5/screen/v1_40000_full --buffers buffers/aistpp_genre5/screen/v1_40000_full \
@@ -16,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import statistics
 from pathlib import Path
 
 
@@ -95,6 +97,23 @@ def main() -> int:
               f"{r['old_fidk']:.0f} / {r['new_fidk']:.0f} | {probe} | {r['comp']} |")
     for name in unfinished:
         print(f"| {name} | not finished | | | | | | | | | |")
+
+    groups = {}
+    for name, r in rows:
+        if not name.endswith("(main run)"):
+            groups.setdefault(re.sub(r"_seed\d+$", "", name), []).append(r)
+    if any(len(v) > 1 for v in groups.values()):
+        def ms(v):
+            return f"{statistics.mean(v):.3f} ± {statistics.stdev(v):.3f}" if len(v) > 1 else f"{v[0]:.3f}"
+
+        print("\nPer method over training seeds (<variant> and <variant>_seed<k> replay the same buffer): mean ± "
+              "standard deviation over runs, ranked by the mean harmonic mean.\n")
+        print("| method | runs | S0 retention (old) | S1 retention (new) | harmonic mean | harmonic mean range |")
+        print("|---|---|---|---|---|---|")
+        for k, v in sorted(groups.items(), key=lambda kv: -statistics.mean(r["hmean"] for r in kv[1])):
+            h = [r["hmean"] for r in v]
+            print(f"| {k} | {len(v)} | {ms([r['old'] for r in v])} | {ms([r['new'] for r in v])} | **{ms(h)}** | "
+                  f"{min(h):.3f} – {max(h):.3f} |")
     return 0
 
 

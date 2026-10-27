@@ -22,6 +22,7 @@
 #                             (correlated channels, and clips of one song sharing their music)
 #             tmr_joint_op    tmr_joint_neff that also matches the temporal operator (second moment), not only the mean
 #             tmr_resp_neff   tmr_joint_neff on the music + denoiser hidden-state trajectory instead of the VAE latents
+#             tmr_joint_neff_kd  tmr_joint_neff's buffer replayed by distillation (replay.distill) instead of ground truth
 #             <variant>_seed<k>  that variant trained with seed k on the same buffer (its base variant's screen buffer
 #                             when there is one), for the run-to-run spread: e.g. tmr_dance_sel_seed2
 #             tmr_dance_sel   TMR-dance selection, ground-truth replay
@@ -70,6 +71,7 @@ selection() {  # variant -> "<selection method or -> <distill true|false> [extra
     random|csrel|tmr|ocs|gcr|mir|tmgm) echo "$1 false" ;;
     random_star) echo "random false --override replay.star.enable=true" ;;
     tmr_mix|tmr_joint|tmr_joint_ess|tmr_joint_neff|tmr_joint_op|tmr_resp_neff) echo "$1 false" ;;
+    tmr_joint_neff_kd) echo "tmr_joint_neff true" ;;
     tmr_dance_sel) echo "tmr_dance false" ;;
     tmr_dance) echo "tmr_dance true" ;;
     random_distill) echo "random true" ;;

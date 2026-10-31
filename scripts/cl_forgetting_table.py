@@ -9,6 +9,8 @@ Missing entries are shown as '-'; the summary uses the sessions trained so far (
 
 Usage:
   python scripts/cl_forgetting_table.py --results_dir results/aistpp_genre5/vanilla
+  python scripts/cl_forgetting_table.py --results_dir results/aistpp_genre5/screen/<tag>/<variant> \
+      --s0_dir results/aistpp_genre5/screen/<tag>/s0_model      # a screen variant: S0 scores are shared
 """
 
 from __future__ import annotations
@@ -31,13 +33,16 @@ METRICS = {"StyleRetention": True, "DanceRate": True, "StyleAcc": True, "StyleFD
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--results_dir", type=Path, required=True)
+    ap.add_argument("--s0_dir", type=Path, default=None,
+                    help="where the after_s0_sess*.json missing from results_dir are (screens: <screen results>/s0_model)")
     a = ap.parse_args()
 
     entries = {}
-    for p in a.results_dir.glob("after_s*_sess*.json"):
-        m = re.fullmatch(r"after_s(\d+)_sess(\d+)\.json", p.name)
-        if m:
-            entries[int(m.group(1)), int(m.group(2))] = json.loads(p.read_text())
+    for d in [a.s0_dir, a.results_dir] if a.s0_dir else [a.results_dir]:  # results_dir's own entries win
+        for p in d.glob("after_s*_sess*.json"):
+            m = re.fullmatch(r"after_s(\d+)_sess(\d+)\.json", p.name)
+            if m and (d == a.results_dir or m.group(1) == "0"):
+                entries[int(m.group(1)), int(m.group(2))] = json.loads(p.read_text())
     if not entries:
         raise SystemExit(f"no after_s*_sess*.json in {a.results_dir}")
     K = max(max(t, i) for t, i in entries) + 1

@@ -35,7 +35,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 FPS, WIN, STRIDE = 30, 150, 30  # style encoder windows (metrics/style_encoder.py)
 GENRE = {"BR": "Break", "PO": "Pop", "LO": "Lock", "WA": "Waack", "MH": "Middle Hip-hop", "LH": "LA Hip-hop",
-         "HO": "House", "KR": "Krump", "JS": "Street Jazz", "JB": "Ballet Jazz", "other": "not dance"}
+         "HO": "House", "KR": "Krump", "JS": "Street Jazz", "JB": "Ballet Jazz", "other": "no dance genre"}
 METHOD = {"tmr_joint_neff": "TMR", "tmr": "TMR", "gcr": "GCR", "random": "Random", "random_star": "Random*",
           "ocs": "OCS", "mir": "MIR", "csrel": "CSReL", "tmgm": "TMGM"}
 # SMPL 22 joints, y up: (bone, colour) for the left limbs, right limbs and spine
@@ -96,6 +96,7 @@ class Panel:
         st = np.load(pack / d["file"].replace(".joints.npz", ".style.npz"))
         self.prob, self.owner = st["prob"], st["owner"]
         s0p = self.prob[:, s0].sum(1)
+        self.retention = float(s0p.mean())  # over all windows, as StyleRetention
         self.mean_s0 = np.bincount(self.owner, weights=s0p) / np.maximum(np.bincount(self.owner), 1)
 
     def entry(self, music: str, sample: int) -> int:  # joints.npz entry q = sample * n_music + music index
@@ -323,7 +324,7 @@ def main() -> int:
         titles = [(t, s) for t, (_, s) in zip(a.labels.split("|"), titles)]
 
     print("S0 style over all dances (StyleRetention): "
-          + "  ".join(f"{p.d['variant']}@S{p.d['after']} {float(p.mean_s0.mean()):.3f}" for p in panels))
+          + "  ".join(f"{p.d['variant']}@S{p.d['after']} {p.retention:.3f}" for p in panels))
     rows = rank(panels)
     if a.list:
         print(f"\n{'rank':>4}  {'score':>6}  " + "  ".join(f"{p.d['variant'][:18]:>18}" for p in panels)

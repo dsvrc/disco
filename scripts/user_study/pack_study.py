@@ -10,9 +10,12 @@ Trials (5 s windows, the style encoder's unit, so every clip has exactly one sco
   * style (main): two windows generated for the SAME test music, sample and time window by two different models or
     checkpoints, shown under two real reference clips of the music's genre; "which one dances more like the
     references?". Stratified by how far apart the style encoder puts them, |P_A(genre) - P_B(genre)| in
-    [0, .1) / [.1, .4) / [.4, 1], and by type: "forget" = a model right after learning the session vs the same lineage
-    after a later session, "cross" = any two models.
-  * catch: a real window of the genre vs a real window of a distant genre (attention check, answer known).
+    [0, .1) / [.1, .4) / [.4, 1], by type: "forget" = a model right after learning the session vs the same lineage
+    after a later session, "cross" = any two models, and by composition: in --dance_pairs (half) of each cell both
+    clips are dance to the encoder (P(other) < .5), so the choice is about style rather than dance vs no dance.
+  * catch: a real window of the genre vs a real window of a distant genre (attention check, answer known; both
+    clips are recognised as their genre by the encoder, so the check is unambiguous).
+Real clips (references, catch, practice) come from the more active half of their genre's windows (by joint speed).
   * practice: like catch, shown first with feedback.
   * dance: one generated window, "is the figure dancing?", spread over P(other) (checks DanceRate / the reject class).
 Every clip carries its scores under each compared metric, computed on that exact window:
@@ -105,6 +108,9 @@ def main() -> int:
     ap.add_argument("--practice", type=int, default=2)
     ap.add_argument("--dance", type=int, default=36, help="dance trials (generated; plus 1/6 as many real ones)")
     ap.add_argument("--refs_per_genre", type=int, default=2)
+    ap.add_argument("--dance_pairs", type=float, default=0.5,
+                    help="share of each (type, delta) cell whose two clips are both dance to the encoder")
+    ap.add_argument("--dance_thresh", type=float, default=0.5, help="P(other) below which a clip counts as dance")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", type=Path, default=Path("study_pack.zip"))
     a = ap.parse_args()
@@ -195,14 +201,23 @@ def main() -> int:
     bounds = np.flatnonzero(np.diff(Wn["key"][order])) + 1
     groups = [g for g in np.split(order, bounds) if len(g) >= 2]
     rng.shuffle(groups)
-    quota = {(ty, b): a.pairs // (len(TYPES) * (len(BINS) - 1)) for ty in TYPES for b in range(len(BINS) - 1)}
-    for x in list(quota)[: a.pairs - sum(quota.values())]:
+    # cells: (type, |delta| bin, composition); "dance" = both clips are dance to the encoder (P(other) < threshold),
+    # so humans must judge style, not dance vs no dance; "any" = no constraint
+    per_cell = a.pairs // (len(TYPES) * (len(BINS) - 1))
+    quota = {}
+    for ty in TYPES:
+        for b in range(len(BINS) - 1):
+            quota[ty, b, "dance"] = int(round(per_cell * a.dance_pairs))
+            quota[ty, b, "any"] = per_cell - quota[ty, b, "dance"]
+    for x in [k for k in quota if k[2] == "any"][: a.pairs - sum(quota.values())]:
         quota[x] += 1
+    dancing = Wn["po"] < a.dance_thresh
     n_genres = len({int(x) for x in Wn["g"]})
     genre_cap = math.ceil(1.5 * a.pairs / n_genres)
     music_cap = max(2, math.ceil(3 * a.pairs / len(music_id)))
     used_g, used_m, pairs, used_grp = {}, {}, [], set()
-    for strict in (True, False):  # second pass: fill whatever quota is left with any (type, bin)
+    sample = lambda xs, n: [xs[j] for j in rng.permutation(len(xs))[:n]]
+    for strict in (True, False):  # second pass: fill whatever quota is left with any cell
         for gi, grp in enumerate(groups):
             if len(pairs) >= a.pairs:
                 break
@@ -211,27 +226,34 @@ def main() -> int:
             g, m = int(Wn["g"][grp[0]]), int(Wn["key"][grp[0]] // (S_MAX * K_MAX))
             if used_g.get(g, 0) >= genre_cap or used_m.get(m, 0) >= music_cap:
                 continue
-            # forget pairs are rare among random draws, so they are enumerated; cross pairs are drawn at random
+            # forget pairs are rare among random draws, so they are enumerated; cross pairs are drawn at random;
+            # both from all windows and from the dancing ones only (dancing pairs with a large delta are rarer)
             forget = [(grp[x], grp[y]) for x, y in np.argwhere(forget_matrix(grp, grp))]
-            drawn = [forget[j] for j in rng.permutation(len(forget))[:12]]
+            dg = grp[dancing[grp]]
+            drawn = sample(forget, 12) + sample([p for p in forget if dancing[p[0]] and dancing[p[1]]], 12)
             drawn += [tuple(rng.choice(grp, 2, replace=False)) for _ in range(12)]
+            drawn += [tuple(rng.choice(dg, 2, replace=False)) for _ in range(12)] if len(dg) >= 2 else []
             cand = []
             for wa, wb in drawn:
                 ty = "forget" if forget_pair(wa, wb) else "cross"
                 d = abs(float(Wn["pg"][wa] - Wn["pg"][wb]))
                 b = int(np.searchsorted(BINS, d, side="right") - 1)
-                need = quota[ty, b] if strict else 1
+                both = bool(dancing[wa] and dancing[wb])
+                cell = "dance" if both and quota[ty, b, "dance"] > 0 else "any"
+                need = quota[ty, b, cell] if strict else 1
                 if need > 0:
-                    cand.append((need + rng.random(), ty, b, int(wa), int(wb), d))
-            for _, ty, b, wa, wb, d in sorted(cand, reverse=True):
+                    cand.append((need + rng.random(), ty, b, cell, both, int(wa), int(wb), d))
+            for _, ty, b, cell, both, wa, wb, d in sorted(cand, reverse=True):
                 if window_ok(wa) and window_ok(wb):
-                    pairs.append({"type": ty, "bin": b, "a": wa, "b": wb, "delta": d})
-                    quota[ty, b] -= 1
+                    pairs.append({"type": ty, "bin": b, "a": wa, "b": wb, "delta": d, "both_dance": both})
+                    quota[ty, b, cell] -= 1
                     used_g[g] = used_g.get(g, 0) + 1
                     used_m[m] = used_m.get(m, 0) + 1
                     used_grp.add(gi)  # one pair per (music, sample, window)
                     break
-    print(f"[study] {len(pairs)} style pairs; unfilled quota {dict((f'{k[0]}/bin{k[1]}', v) for k, v in quota.items() if v > 0) or 'none'}")
+    left = {f"{k[0]}/bin{k[1]}/{k[2]}": v for k, v in quota.items() if v > 0}
+    print(f"[study] {len(pairs)} style pairs ({sum(p['both_dance'] for p in pairs)} with both clips dancing); "
+          f"unfilled quota {left or 'none'}")
 
     # ---------------- real dance: references, catch and practice clips, genre centroids --------------------------
     gt = []
@@ -248,20 +270,27 @@ def main() -> int:
         nw = min(len(d["emb"]), len(d["kin"]))
         d["emb"], d["prob"], d["kin"], d["geo"] = d["emb"][:nw], d["prob"][:nw], d["kin"][:nw], d["geo"][:nw]
     by_genre = {g: [x for x, d in enumerate(gt) if d["genre"] == g] for g in genres}
+    for d in gt:
+        d["speed"] = np.array([speed(d["J"][STRIDE * k:STRIDE * k + WIN]) for k in range(len(d["emb"]))])
+    # real clips are taken from the genre's more active half (sequences open and close standing still); chosen by
+    # motion alone, so the references do not lean towards what the encoder thinks the genre is
+    med_speed = {g: float(np.median(np.concatenate([gt[x]["speed"] for x in xs]))) for g, xs in by_genre.items() if xs}
 
-    def gt_window(x: int, min_speed: float = 0.3) -> int | None:
-        J = gt[x]["J"]
-        ok = [k for k in range(len(gt[x]["emb"])) if not problems(J[STRIDE * k:STRIDE * k + WIN])
-              and speed(J[STRIDE * k:STRIDE * k + WIN]) > min_speed]
+    def gt_window(x: int, check: bool) -> int | None:
+        d, g = gt[x], gt[x]["genre"]
+        ok = [k for k in range(len(d["emb"])) if not problems(d["J"][STRIDE * k:STRIDE * k + WIN])
+              and d["speed"][k] >= max(0.3, med_speed[g])
+              # attention checks must be unambiguous: the encoder also sees the clip's own genre
+              and (not check or classes[int(d["prob"][k].argmax())] == g)]
         return int(rng.choice(ok)) if ok else None
 
     used_seq: set[int] = set()
 
-    def take_gt(g: str) -> tuple[int, int] | None:
+    def take_gt(g: str, check: bool = False) -> tuple[int, int] | None:
         for x in rng.permutation(by_genre[g]):
             if int(x) in used_seq:
                 continue
-            k = gt_window(int(x))
+            k = gt_window(int(x), check)
             if k is not None:
                 used_seq.add(int(x))
                 return int(x), k
@@ -331,14 +360,20 @@ def main() -> int:
     trials = []
     for p in pairs:
         trials.append({"task": "style", "type": p["type"], "genre": genres[int(Wn["g"][p["a"]])],
-                       "a": add_gen(p["a"]), "b": add_gen(p["b"]), "delta": p["delta"], "bin": p["bin"]})
+                       "a": add_gen(p["a"]), "b": add_gen(p["b"]), "delta": p["delta"], "bin": p["bin"],
+                       "both_dance": p["both_dance"]})
     rng.shuffle(trials)
     for n, tr in enumerate(trials, 1):
         tr["id"] = f"m{n:03d}"
     for kind, count in (("catch", a.catch), ("practice", a.practice)):
         for n in range(count):
             g = pair_genres[n % len(pair_genres)] if kind == "catch" else str(rng.choice(pair_genres))
-            ra, rb = take_gt(g), take_gt(far_genre(g))
+            h = far_genre(g)
+            ra, rb = take_gt(g, check=True), take_gt(h, check=True)
+            if not (ra and rb):  # no window the encoder recognises: fall back to any active one
+                print(f"[study] WARNING: {kind} trial {n + 1}: no real {g if not ra else h} window recognised as its "
+                      f"genre, using an unchecked one")
+                ra, rb = ra or take_gt(g), rb or take_gt(h)
             if ra and rb:
                 trials.append({"id": f"{kind[0]}{n + 1:02d}", "task": "style", "type": kind, "genre": g,
                                "a": add_gt(*ra), "b": add_gt(*rb), "expected": "a", "delta": None, "bin": None})

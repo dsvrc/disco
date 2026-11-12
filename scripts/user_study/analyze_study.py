@@ -9,7 +9,8 @@ Score the StyleRetention human study: how often each metric picks the clip human
 Pre-registered analysis (fix these before collecting answers):
   exclusion   catch accuracy < 0.75 (Can't tell counts as wrong) or < 80 % of the assigned main trials answered
   primary     agreement of StyleRetention (genre level, P(music's genre)) with human choices on main trials,
-              Can't tell excluded; 95 % CI by bootstrap over trials; H1: > 0.5
+              Can't tell excluded; 95 % CI by bootstrap over trials; H1a: > 0.5 on all pairs; H1b (the style
+              claim): > 0.5 on pairs where both clips are dance (P(other) < 0.5), and above 1 - P(other) there
   secondary   (H2) the same agreement for every baseline (handcrafted probe = Robust Dancer-style classifier,
               kinetic / geometric feature distance = per-clip FID_k / FID_g, embedding similarity = StyleFD, and
               1 - P(other)), with the paired difference to StyleRetention; agreement by |delta| stratum (should rise
@@ -235,6 +236,21 @@ def main() -> int:
         w(f"| {label} | {fmt(est)} | {fmt(lo)}–{fmt(hi)} | {fmt(dv)} | "
           f"{'-' if dl is None else fmt(dl) + '–' + fmt(dh)} | {fmt(np.mean(maj)) if maj else '-'} |")
     w("\nΔ > 0 means StyleRetention (genre) agrees with people more often than that metric.\n")
+
+    # ---------------- H1b: style, not just dance vs no dance ------------------------------------------------------
+    both = lambda k: all(clips[trials[k][s]]["scores"]["p_other"] < 0.5 for s in ("a", "b"))
+    sub_b = {k: v for k, v in by_trial.items() if both(k)}
+    sub_n = {k: v for k, v in by_trial.items() if not both(k)}
+    w("## Style or just dance? Pairs where both clips are dance vs not\n")
+    w("When one clip is not dance, picking the dancing one is easy and any dance detector agrees with people. "
+      "The style claim rests on the pairs where both clips are dance (P(other) < 0.5 for both).\n")
+    w(f"| Metric | Both dancing ({len(sub_b)} trials) | 95% CI | At least one not dancing ({len(sub_n)} trials) |")
+    w("|---|---|---|---|")
+    for m, label in [("human", "Human-human ceiling")] + METRICS:
+        eb, lb, hb = boot(sub_b, lambda rs, m=m: agree_rate(rs, m), rng) if sub_b else (np.nan,) * 3
+        en = agree_rate([r for v in sub_n.values() for r in v], m) if sub_n else np.nan
+        w(f"| {label} | {fmt(eb)} | {fmt(lb)}–{fmt(hb)} | {fmt(en)} |")
+    w("")
 
     # ---------------- agreement by stratum ---------------------------------------------------------------------
     bins = study["bins"] + [1.0]

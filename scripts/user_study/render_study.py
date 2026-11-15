@@ -26,8 +26,6 @@ import importlib.util
 import io
 import json
 import os
-import random
-import time
 import zipfile
 from multiprocessing import Pool
 from pathlib import Path
@@ -45,16 +43,23 @@ def _load_demo_render():
         spec = importlib.util.spec_from_file_location("demo_render", REPO / "scripts" / "cl" / "demo_render.py")
         DR = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(DR)
-        # several workers probing the bundled ffmpeg at the same moment can fail its check on Windows: retry
-        import imageio_ffmpeg
-
-        for k in range(8):
-            try:
-                imageio_ffmpeg.get_ffmpeg_exe()
-                break
-            except RuntimeError:
-                time.sleep(0.3 + 0.4 * k + random.random())
     return DR
+
+
+def resolve_ffmpeg() -> str:
+    """Find ffmpeg and its H.264 encoder once, in the main process, and hand both to the workers. Several workers
+    probing the bundled ffmpeg at the same moment can fail its check on Windows, and imageio-ffmpeg caches a failed
+    lookup for the life of the process, so a retry inside a worker never recovers. With IMAGEIO_FFMPEG_EXE set
+    (inherited by the workers) imageio-ffmpeg uses the path without probing."""
+    import imageio_ffmpeg
+
+    os.environ.setdefault("IMAGEIO_FFMPEG_EXE", imageio_ffmpeg.get_ffmpeg_exe())
+    try:
+        from imageio_ffmpeg._io import get_first_available_h264_encoder
+
+        return get_first_available_h264_encoder()
+    except (ImportError, RuntimeError):
+        return "libx264"
 
 
 def read_pack(pack: Path) -> tuple[dict, dict]:
@@ -68,21 +73,28 @@ def read_pack(pack: Path) -> tuple[dict, dict]:
     return json.loads((pack / "study.json").read_text()), {k: clips[k] for k in clips.files}
 
 
+def done(path: Path) -> bool:
+    """A finished clip: a 5 s clip is ~100-500 KB, a header-only file 48 bytes."""
+    return path.exists() and path.stat().st_size > 10_000
+
+
 def render_clip(job) -> str:
-    cid, J, out, yaw, elev, dist = job
-    if out.exists() and out.stat().st_size > 0:
+    cid, J, out, yaw, elev, dist, codec = job
+    if done(out):
         return cid
     dr = _load_demo_render()
     import imageio_ffmpeg
 
     view = dr.View(J.astype(np.float64), yaw, elev, dist)
     tmp = out.with_suffix(".part.mp4")
-    w = imageio_ffmpeg.write_frames(str(tmp), (dr.PW, dr.VH), fps=FPS, quality=7, macro_block_size=16,
+    w = imageio_ffmpeg.write_frames(str(tmp), (dr.PW, dr.VH), fps=FPS, quality=7, codec=codec, macro_block_size=16,
                                     ffmpeg_log_level="error", output_params=["-movflags", "+faststart"])
     w.send(None)
     for t in range(len(J)):
         w.send(np.ascontiguousarray(view.draw(t)))
     w.close()
+    if not done(tmp):  # ffmpeg can exit cleanly with only a header written, e.g. on a full disk
+        raise RuntimeError(f"{tmp} has {tmp.stat().st_size} bytes: is the disk full?")
     tmp.replace(out)
     return cid
 
@@ -131,9 +143,10 @@ def main() -> int:
     vdir = a.out / "v"
     vdir.mkdir(parents=True, exist_ok=True)
     if not a.site_only:
-        jobs = [(c, clips[c], vdir / f"{c}.mp4", a.yaw, a.elev, a.dist) for c in sorted(used)]
-        todo = [j for j in jobs if not (j[2].exists() and j[2].stat().st_size > 0)]
-        print(f"[study] rendering {len(todo)} of {len(jobs)} clips with {a.workers} workers")
+        codec = resolve_ffmpeg()
+        jobs = [(c, clips[c], vdir / f"{c}.mp4", a.yaw, a.elev, a.dist, codec) for c in sorted(used)]
+        todo = [j for j in jobs if not done(j[2])]
+        print(f"[study] rendering {len(todo)} of {len(jobs)} clips with {a.workers} workers ({codec})")
         with Pool(a.workers, initializer=_load_demo_render) as pool:
             for n, _ in enumerate(pool.imap_unordered(render_clip, todo), 1):
                 if n % 20 == 0 or n == len(todo):

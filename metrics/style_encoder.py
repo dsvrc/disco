@@ -565,11 +565,20 @@ def validate(dataset: str, tag: str = "", ood_joints: str | None = None) -> dict
 
     info, J = dataset_info(dataset), load_joints(dataset)
     enc = StyleEncoder(ckpt_path(dataset, -1, tag))
+    fdir, broot = Path(DATASETS[dataset]["feature_dir"]), info["root"]
+    probe = GenreProbe.load(broot / "eval" / "probe.npz")
+    # sessions follow the benchmark's current pairing. The checkpoint and probe.npz store the pairing they were built
+    # with; re-pairing genres into sessions changes only this mapping, not the genre classifiers.
+    now_enc = np.asarray(benchmark_session_of_class(enc.classes, json.loads((broot / "manifest.json").read_text())))
+    for what, obj, now in (("encoder checkpoint", enc, now_enc), ("eval/probe.npz", probe,
+                                                                   np.asarray(info["session_of_class"]))):
+        if not np.array_equal(np.asarray(obj.session_of_class), now):
+            print(f"[validate] {what} stores the session pairing {np.asarray(obj.session_of_class).tolist()}; "
+                  f"scoring with the benchmark's current one {now.tolist()}", flush=True)
+            obj.session_of_class = now
     # genre labels index `classes`; predictions index enc.classes (may end with the reject class -> session -1)
     K, classes, soc = info["K"], info["classes"], np.asarray(enc.session_of_class)
     label, sess_of, test = info["label"], info["sess"], info["split"]["test"]
-    fdir, broot = Path(DATASETS[dataset]["feature_dir"]), info["root"]
-    probe = GenreProbe.load(broot / "eval" / "probe.npz")
     refs = np.load(broot / "eval" / "refs.npz")
     rng = np.random.default_rng(0)
     rep = {"dataset": dataset, "classes": classes, "session_of_class": soc.tolist(), "aug_ranges": AUG,
@@ -583,14 +592,35 @@ def validate(dataset: str, tag: str = "", ood_joints: str | None = None) -> dict
     pred = out["prob"].argmax(1)
     Xh = np.concatenate([np.concatenate(cached_window_features(fdir, n), 1) for n in test])
     ph = probe_cls(Xh)
+    # per genre: accuracy, confusions, and whole dances (a dance gets the genre / session most of its windows get)
+    conf = np.zeros((len(classes), len(enc.classes)), int)
+    np.add.at(conf, (win_c, pred), 1)
+    owner = out["owner"]
+    dance_genre = np.array([np.bincount(pred[owner == i], minlength=len(enc.classes)).argmax() for i in range(len(test))])
+    dance_sess = np.array([np.bincount(soc[pred[owner == i]] + 1, minlength=K + 1).argmax() - 1 for i in range(len(test))])
+    true_genre = np.array([classes.index(label[n]) for n in test])
+    true_sess = np.array([sess_of[n] for n in test])
+    p_own = out["prob"][np.arange(len(pred)), win_c]
     rep["clean"] = {
         "n_windows": int(len(pred)),
         "encoder": {"genre_acc": float((pred == win_c).mean()), "session_acc": float((soc[pred] == win_s).mean()),
                     "per_session": [enc.session_scores(out["prob"][win_s == s], s) for s in range(K)],
-                    "ece": _ece(out["prob"], win_c), "temperature": enc.temperature},
+                    "ece": _ece(out["prob"], win_c), "temperature": enc.temperature,
+                    "per_genre_acc": {c: float(conf[k, k] / max(1, conf[k].sum())) for k, c in enumerate(classes)},
+                    "per_genre_mean_p_own": {c: float(p_own[win_c == k].mean()) for k, c in enumerate(classes)},
+                    "confusion": {"rows": classes, "cols": list(enc.classes), "counts": conf.tolist()},
+                    "rejected_windows": float((pred == enc.classes.index(OTHER)).mean()) if OTHER in enc.classes else 0.0,
+                    "dances": int(len(test)),
+                    "dances_genre_majority_correct": int((dance_genre == true_genre).sum()),
+                    "dances_session_majority_correct": int((dance_sess == true_sess).sum())},
         "probe": {"genre_acc": float((ph == win_c).mean()) if dataset == "aistpp" else None,
                   "session_acc": float((probe.session_of_class[ph] == win_s).mean())},
     }
+    e_ = rep["clean"]["encoder"]
+    print("[clean] encoder per genre " + " ".join(f"{c} {v:.2f}" for c, v in e_["per_genre_acc"].items())
+          + f" | windows rejected {e_['rejected_windows']:.3f} | whole dances: genre "
+          f"{e_['dances_genre_majority_correct']}/{len(test)}, session {e_['dances_session_majority_correct']}/{len(test)}",
+          flush=True)
     print(f"[clean] encoder genre {rep['clean']['encoder']['genre_acc']:.3f} session "
           f"{rep['clean']['encoder']['session_acc']:.3f} | probe session {rep['clean']['probe']['session_acc']:.3f}",
           flush=True)

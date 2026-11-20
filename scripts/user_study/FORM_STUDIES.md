@@ -1,17 +1,19 @@
 # Google Forms user studies (TMR paper, supplementary H.12 and H.15)
 
 Two studies, one Google Form each, every participant signed in with a Google account (verified e-mail = record of who
-took part). Each participant sees 14 to 15 videos per study. Each study has two versions (different stimuli, same
-rule). Participants are given version 1 or 2 in alternation, so twice as many stimuli are rated with no longer forms.
+took part). Each participant sees 12 videos in Study 1 and 15 in Study 2. Each study has two groups (versions) with
+different stimuli, chosen by the same rule. Participants get Group 1 or Group 2 in alternation, so twice as many
+stimuli are rated without making the forms longer. How to build the forms: `GOOGLE_FORMS_HOWTO.md`.
 
 | | Study 1: DiscoForcing preference (H.15) | Study 2: StyleRetention validation (H.12) |
 |---|---|---|
 | Question | Do people prefer TMR+KD's dance to fine-tuning's, and does it keep the earlier genres? | Do people's style judgments follow StyleRetention, and more closely than the existing metrics? |
 | Method | blind paired comparison (2AFC), three criteria | reference-based rating (5-point), one test clip at a time |
-| Videos per form | 12 trials + 2 attention checks = 14 | 12 test clips + 3 controls = 15 |
+| Videos per form | 8 retention + 2 newest-genre trials + 2 attention checks = 12 | 12 test clips + 3 controls = 15 |
 | Video | 15 s with music: real dance (reference), A, B | 5 s silent clip shown twice: 2 real reference clips, TEST |
-| Time | about 12 min | about 7 min |
-| Stimuli from | `pack_disco_study.py` on the server, new zip | the existing `study_pack` (already rendered) |
+| Time | about 10 min | about 7 min |
+| Stimuli from | `disco_study_pack.zip` (server, 2026-11-18) | the existing `study_pack` |
+| Rendered | `form_studies\study1_disco` (24 videos) | `form_studies\study2_style` (30 videos) |
 
 Everything random is drawn from fixed seeds by the scripts, before anyone has looked at any output. No clip is
 picked or swapped by hand. The only filter is the automatic sanity check: no NaN, no joint more than 1.5 m from the
@@ -21,22 +23,28 @@ pelvis, root slower than 6 m/s.
 
 **Hypotheses.** H1 (primary): on test music of earlier genres after the final session, people judge TMR+KD's dance
 closer in style to the real dance more often than fine-tuning's (preference > 50%). H2 (secondary): the same on music
-and naturalness. H3 (secondary, non-inferiority): on each new genre right after it is learned, TMR+KD's preference is
-no worse than 40% (margin 10 points), i.e. replay does not cost the new genre.
+and naturalness. H3 (secondary, non-inferiority): on the newest session's genres (Ballet Jazz and Street Jazz, after
+Session 4), TMR+KD's preference is no worse than 40% (margin 10 points), i.e. replay does not cost the newest genres.
 
-**Trials per version** (`pack_disco_study.py`):
-- 8 *retention* trials: after Session 4, one per earlier genre (Lock, Waack, House, Middle Hip-hop, LA Hip-hop, Pop,
-  Break, Krump), on that genre's test music.
-- 4 *plasticity* trials: after Session k (k = 1..4), on one of Session k's two genres, drawn at random. Version 2
-  uses the other genre.
+**Trials per form.** Three kinds:
+- 8 *retention* trials per group: after Session 4, one per earlier genre (Lock, Waack, House, Middle Hip-hop, LA
+  Hip-hop, Pop, Break, Krump), on that genre's test music. Each group has its own draw.
+- 2 *newest-genre* trials: Ballet Jazz and Street Jazz after Session 4. Both groups see both.
 - 2 *attention checks*: one option is the reference dance itself, the other a real dance of a genre two or more
-  sessions away.
+  sessions away. Both groups see both.
 
-For each trial, the script draws a test music piece not yet used in the form, then a sequence, a generation sample
-and a 15 s window starting at least 3 s in. Both models use the same sample, so the same noise seed. The reference is
-the real dance of that sequence, synchronized with the same music. The side of TMR is balanced within each condition
-(4/4 and 2/2) and otherwise random. The order is random, with one check in each half and never in the first three.
-GCR+KD is packed on the same windows too, so a TMR+KD vs GCR+KD form can be added later without a server trip.
+AIST++ has a single test music piece per genre, and its short "basic" sequences (7 to 12 s) cannot hold a 15 s
+window. A form can therefore hold only one trial per genre. The pack (`pack_disco_study.py`) skips the planned
+plasticity trials of Sessions 1 to 3 (their songs are taken by the retention trials) and finds a song for only one
+check per group. `render_form_studies.py` shares the newest-genre trials and the checks between the groups; this is
+the H.15 plan of rating the newest session's music. It also mirrors one check so that the correct answers alternate
+(B, A), and orders each form so that no two neighbouring trials play the same song.
+
+For each trial, the pack drew a sequence of the genre's test song, a generation sample and a 15 s window starting at
+least 3 s in. Both models use the same sample, so the same noise seed. The reference is the real dance of that
+sequence, synchronized with the same music. TMR is on side A in 4 of the 8 retention trials of each form, and in one
+of the two newest-genre trials. Checks are at positions 5 and 10. GCR+KD is packed on the same windows, so a TMR+KD vs
+GCR+KD form can be added later without a server trip.
 
 **Questions per trial** (forced choice, required):
 1. Style: which dance, A or B, is closer to the STYLE of the real dance on the left?
@@ -44,13 +52,13 @@ GCR+KD is packed on the same windows too, so a TMR+KD vs GCR+KD form can be adde
 3. Naturalness: which dance, A or B, looks more NATURAL as human movement?
 
 **Exclusion** (fixed now): a participant who gets the style question of either attention check wrong, or leaves the
-form incomplete.
+form incomplete. A participant who reports no sound is left out of the music question only.
 
 **Analysis** (fixed now):
 - Primary: the share of retention-trial style choices that favor TMR+KD, with a 95% CI from a two-way bootstrap that
   resamples participants and trials (2,000 resamples). H1 holds if the CI lies above 50%.
 - Also reported: the naive binomial test over all choices (for comparison with other papers), the same share for
-  music and naturalness, and the plasticity trials (H3: lower bound above 40%).
+  music and naturalness, and the newest-genre trials (H3: lower bound above 40%).
 - Agreement between raters: Fleiss' kappa per criterion.
 - Exploratory: the correlation over trials between the human style preference and the difference in StyleRetention
   between the two shown clips (in `answer_key.csv`). This tests SR at the level of models.
@@ -131,7 +139,19 @@ Server (repo root, any GPU-free moment; CPU only, a few minutes):
 It writes `disco_study_pack.zip` (tens of MB; the music is cut to the windows) and prints every trial. Missing dances
 are listed with the exact `eval_cl_session.py` command that regenerates them.
 
-Laptop (renders into `C:\Users\chinnu\3d_cvpr\form_studies`):
+Laptop (renders into `C:\Users\chinnu\3d_cvpr\form_studies`; both done 2026-11-18/19), then the Apps Script:
 
-    python scripts/user_study/render_form_studies.py disco --pack C:/Users/chinnu/3d_cvpr/disco_study_pack.zip --out C:/Users/chinnu/3d_cvpr/form_studies
-    python scripts/user_study/render_form_studies.py style --pack C:/Users/chinnu/3d_cvpr/study_pack --out C:/Users/chinnu/3d_cvpr/form_studies   # done 2026-11-18
+    python scripts/user_study/render_form_studies.py disco --pack C:/Users/chinnu/3d_cvpr/disco_study_pack.zip --out C:/Users/chinnu/3d_cvpr/form_studies --workers 2
+    python scripts/user_study/render_form_studies.py style --pack C:/Users/chinnu/3d_cvpr/study_pack --out C:/Users/chinnu/3d_cvpr/form_studies
+    python scripts/user_study/make_forms_script.py --studies C:/Users/chinnu/3d_cvpr/form_studies --out scripts/user_study/google_forms_builder.gs
+
+Style encoder accuracy on real AIST++ dance (server, repo root; CPU). It writes
+`raw_data/cl_sessions/_style_encoder/aistpp/validation.json` and fills the encoder column of Tab. sr_valid:
+
+    STYLE_ENCODER_DEVICE=cpu python -m metrics.style_encoder validate --dataset aistpp 2>&1 | tee encoder_validate.log
+
+`validate` scores sessions with the benchmark's current pairing, and says so if the checkpoint or `eval/probe.npz`
+stored an older one. It reports window-level genre and session accuracy on the test music, which no training dance
+used, per-genre accuracy and confusions, whole dances assigned by majority vote, accuracy on dancers never seen in
+training (3 folds; it trains a missing fold encoder first), robustness to artefacts, the genre-swap retention
+matrix, and rejection of non-dance.

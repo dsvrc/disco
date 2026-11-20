@@ -140,7 +140,16 @@ def render_job(job: dict) -> str:
              for J, x, y, size in job["panels"]]
     base = overlay(job["texts"], job["boxes"])
     n = job["frames"]
-    tmp = Path(tempfile.mkdtemp()) / "video.mp4"
+    with tempfile.TemporaryDirectory() as tmpdir:  # removed even when a job fails (the disk is nearly full)
+        _render_frames(job, views, base, n, Path(tmpdir) / "video.mp4", out)
+    out.with_suffix(".sig").write_text(job["sig"])
+    return out.name
+
+
+def _render_frames(job: dict, views: list, base: np.ndarray, n: int, tmp: Path, out: Path) -> None:
+    import cv2
+    import imageio_ffmpeg
+
     params = ["-movflags", "+faststart"] + (["-crf", "18", "-preset", "medium"] if job["codec"] == "libx264" else [])
     w = imageio_ffmpeg.write_frames(str(tmp), (W, H), fps=FPS, codec=job["codec"], macro_block_size=8,
                                     quality=None if job["codec"] == "libx264" else 8, ffmpeg_log_level="error",
@@ -174,12 +183,9 @@ def render_job(job: dict) -> str:
         subprocess.run(cmd, check=True)
     else:
         part.write_bytes(tmp.read_bytes())
-    tmp.unlink()
     if not done(part):
         raise RuntimeError(f"{part} has {part.stat().st_size} bytes: is the disk full?")
     part.replace(out)
-    out.with_suffix(".sig").write_text(job["sig"])
-    return out.name
 
 
 def run_jobs(jobs: list[dict], workers: int, only: list[str] | None = None) -> None:
@@ -211,6 +217,56 @@ def insert_positions(n_test: int, n_ctrl: int, rng, first: int = 2) -> set[int]:
 # ---------------------------------------------------------------------------------------------------------------
 # Study 1: DiscoForcing preference (TMR+KD against fine-tuning)
 # ---------------------------------------------------------------------------------------------------------------
+def compose_disco(study: dict, seed: int, n_checks: int = 2) -> dict[str, list[dict]]:
+    """The trials each form shows, in order. AIST++ has one test music piece per genre, so a version of the pack
+    holds at most one trial per genre: the pack skips the plasticity trials of earlier sessions (their music is taken
+    by the retention trials) and finds music for only one attention check. Each form therefore shows its own
+    retention trials plus the pooled newest-genre trials (the final session's genres, after it) and the pooled
+    checks, shared by every version, until it has every final-session genre and n_checks checks. The correct side
+    alternates over the pooled checks (a check is shown mirrored, A <-> B, when needed). Order: seeded shuffle with
+    the checks spread out, never in the first three positions and never two in a row."""
+    rng = np.random.default_rng(seed)
+    vs = sorted(study["versions"], key=int)
+    final = study["final"]
+    is_new = lambda t: t["condition"] == "plasticity" and t["after"] == final
+    pool_new = [t for v in vs for t in study["versions"][v] if is_new(t)]
+    pool_chk = sorted((t for v in vs for t in study["versions"][v] if t["condition"] == "check"), key=lambda t: t["id"])
+    swap = {}
+    for k, t in enumerate(pool_chk):  # alternate the correct side: first check as packed, then A/B alternately
+        want = pool_chk[0]["expected"] if k % 2 == 0 else ("B" if pool_chk[0]["expected"] == "A" else "A")
+        swap[t["id"]] = t["expected"] != want
+    out = {}
+    for v in vs:
+        own = study["versions"][v]
+        items = [dict(t, condition="retention" if t["condition"] == "retention" else "plasticity")
+                 for t in own if t["condition"] == "retention" or (t["condition"] == "plasticity" and not is_new(t))]
+        new = [dict(t, condition="newest") for t in own if is_new(t)]
+        for t in pool_new:
+            if t["genre"] not in {x["genre"] for x in new}:
+                new.append(dict(t, condition="newest"))
+        checks = [dict(t) for t in pool_chk if str(t["version"]) == v]
+        for t in pool_chk:
+            if len(checks) < n_checks and t["id"] not in {c["id"] for c in checks}:
+                checks.append(dict(t))
+        items += new
+        for _ in range(2000):  # redraw until no two neighbouring trials play the same song
+            perm = [items[int(k)] for k in rng.permutation(len(items))]
+            slots = insert_positions(len(perm), len(checks), rng, first=3)
+            it_i, it_c = iter(perm), iter(checks)
+            order = [next(it_c) if p in slots else next(it_i) for p in range(len(perm) + len(checks))]
+            if all(x["music_id"] != y["music_id"] for x, y in zip(order, order[1:])):
+                break
+        for pos, t in enumerate(order, 1):
+            t["form_position"], t["shared"] = pos, str(t["version"]) != v
+            if t["condition"] == "check" and swap.get(t["id"]):
+                t["panels"] = {"ref": t["panels"]["ref"], "A": t["panels"]["B"], "B": t["panels"]["A"]}
+                t["key"] = {"A": t["key"]["B"], "B": t["key"]["A"]}
+                t["expected"] = "B" if t["expected"] == "A" else "A"
+                t["mirrored"] = True
+        out[v] = order
+    return out
+
+
 def disco(a) -> int:
     pack = a.pack
     if pack.suffix == ".zip":
@@ -228,16 +284,19 @@ def disco(a) -> int:
     vdir.mkdir(parents=True, exist_ok=True)
     codec = resolve_ffmpeg()
     versions = [str(v) for v in (a.versions or sorted(study["versions"], key=int))]
+    forms = compose_disco(study, a.seed)
+    appears = Counter(t["id"] for ts in forms.values() for t in ts)  # trials shown in more than one form
     jobs, spec, key_rows = [], {}, []
     n_frames = int(round(study["seconds"] * FPS))
     xs = {"ref": (20, 150 + (BIG[1] - SMALL[1]) // 2 - 60), "A": (510, 150), "B": (1220, 150)}
     for v in versions:
-        trials = study["versions"][v]
+        trials = forms[v]
         spec[v] = []
         for t in trials:
-            name = f"study1_v{v}_t{t['position']:02d}.mp4"
+            pos = t["form_position"]
+            name = f"study1_v{v}_t{pos:02d}.mp4"
             rx, ry = xs["ref"]
-            texts = [(f"Trial {t['position']}", (40, 48), 40, True, INK, "lm"),
+            texts = [(f"Trial {pos}", (40, 48), 40, True, INK, "lm"),
                      ("sound on", (W - 40, 48), 26, False, MUTED, "rm"),
                      ("Real dance", (rx + SMALL[0] // 2, ry - 52), 32, True, INK, "mm"),
                      ("(reference)", (rx + SMALL[0] // 2, ry - 18), 24, False, MUTED, "mm"),
@@ -254,19 +313,23 @@ def disco(a) -> int:
                          "wav": str(wav) if wav.exists() else None, "wav_offset": t["wav"].get("offset", 0.0),
                          "yaw": a.yaw, "elev": a.elev, "dist": a.dist, "codec": codec,
                          "sig": signature(study["created"], t["panels"], texts, n_frames, t["wav"], a.yaw, a.elev, a.dist)})
-            spec[v].append({"position": t["position"], "video": f"videos/{name}", "title": f"Trial {t['position']}",
-                            "kind": "check" if t["condition"] == "check" else "test"})
-            s = t.get("scores") or {}
+            spec[v].append({"position": pos, "video": f"videos/{name}", "title": f"Trial {pos}",
+                            "kind": "check" if t["condition"] == "check" else "test", "trial": t["id"]})
+            s = dict(t.get("scores") or {})
+            if t.get("mirrored"):
+                s["A"], s["B"] = s.get("B"), s.get("A")
             g = lambda side, k: "" if not s.get(side) else f"{s[side][k]:.4f}"
-            key_rows.append({"version": v, "position": t["position"], "video": name, "trial": t["id"],
+            dsr = t.get("dance_sr") or {}
+            key_rows.append({"version": v, "position": pos, "video": name, "trial": t["id"],
+                             "in_both_versions": "yes" if appears[t["id"]] > 1 else "no",
+                             "mirrored": "yes" if t.get("mirrored") else "",
                              "condition": t["condition"], "genre": t["genre"], "after_session": t["after"],
                              "music": t["music"], "sample": t["sample"], "start_s": round(t["start_frame"] / FPS, 2),
                              "A": t["key"]["A"], "B": t["key"]["B"], "expected_style": t.get("expected") or "",
                              "A_p_session": g("A", "p_session"), "B_p_session": g("B", "p_session"),
                              "A_p_genre": g("A", "p_genre"), "B_p_genre": g("B", "p_genre"),
                              "ref_p_session": g("ref", "p_session"),
-                             "A_dance_sr": (t.get("dance_sr") or {}).get("A") or "",
-                             "B_dance_sr": (t.get("dance_sr") or {}).get("B") or ""})
+                             "A_dance_sr": dsr.get("A") or "", "B_dance_sr": dsr.get("B") or ""})
     if not a.plan_only:
         run_jobs(jobs, a.workers, a.only)
     write_outputs(root, "disco", spec, key_rows, {
@@ -492,6 +555,7 @@ def main() -> int:
         p.add_argument("--only", nargs="*", default=None, help="render only these video file names")
         if name == "disco":
             p.add_argument("--versions", nargs="*", default=None, help="versions to render (default all)")
+            p.add_argument("--seed", type=int, default=0, help="order of the trials in each form")
         else:
             p.add_argument("--clips", type=int, default=12, help="generated clips per version")
             p.add_argument("--n_versions", type=int, default=2)
